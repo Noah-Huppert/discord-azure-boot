@@ -1,5 +1,8 @@
+# Bot configuration
+config.js
+
 # Node dependencies
 node_modules/
 
-# Bot configuration
-config.js
+# MongoDB container
+container-data/

@@ -1,0 +1,10 @@
+version: "3.7"
+services:
+  mongo:
+    image: mongo
+    environment:
+      MONGO_INITDB_DATABASE: dev-discord-azure-boot
+    volumes:
+      - "./container-data/mongo:/data/db"
+    ports:
+      - "27017:27017"
