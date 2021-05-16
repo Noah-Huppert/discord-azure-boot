@@ -6,6 +6,16 @@ module.exports = {
 	   subscriptionID: "",
 
 	   /**
+	    * Azure directory ID.
+	    */
+	   directoryID: "",
+
+	   /**
+	    * Azure application ID.
+	    */
+	   applicationID: "",
+
+	   /**
 	    * Azure access token.
 	    */
 	   accessToken: "",
