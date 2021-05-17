@@ -7,7 +7,7 @@ const winston = require("winston");
 /**
  * The Discord permission integer required for the bot to function. See the Discord section in the README.md for details.
  */
-const DISCORD_BOT_PERM = 2147484672; // 2147483648; // 2147765312;
+const DISCORD_BOT_PERM = 2147483648;
 
 /**
  * The boot server Discord slash command name.
@@ -60,27 +60,54 @@ class Bot {
 		this.discord = new Discord.Client({
 			intents: [
 				Discord.Intents.GUILDS,
-				Discord.Intents.GUILD_MESSAGES,
+				// Discord.Intents.GUILD_MESSAGES,
 			],
 		});
 
+		let discordReadyProm = {};
+		discordReadyProm.promise = new Promise((resolve, reject) => {
+			discordReadyProm.resolve = resolve;
+			discordReadyProm.reject = reject;
+		});
 		this.discord.once("ready", () => {
 			let cmds = this.discord.application.commands;
 			if (this.cfg.discord.guildID !== null) {
-				cmds = this.discord.guilds.cache.get(this.cfg.discord.guildID).commands;
+				const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
+
+				if (guild === undefined) {
+					throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
+				}
+
+				cmds = guild.commands;
 				this.log.debug(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
 			}
 			
 			cmds.create({
 				name: BOOT_CMD_NAME,
 				description: "Request a server be started so you can play on it",
+				options: [
+					{
+						name: "server",
+						description: "The server to start",
+						type: 3, // string
+						required: true,
+						choices: this.cfg.vms.map((vm) => {
+							return {
+								name: vm.friendlyName,
+								value: vm.friendlyName,
+							};
+						}),
+					},
+				],
 			});
 
 			this.log.debug("registered discord slash commands");
+			discordReadyProm.resolve();
 		});
 
 		this.discord.on("interaction", this.onInteraction.bind(this));
 		this.discord.login(this.cfg.discord.botToken);
+		await discordReadyProm.promise;
 		this.log.debug("connected to discord");
   }
 

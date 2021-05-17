@@ -49,19 +49,14 @@ Create a new Discord API application with a bot user. Save the bot token for lat
 
 Invite the bot with the following permissions:
 
-- View Channels: Used to see if people are still in voice chat, if they aren't the bot will shut down the game server after sending a warning message
-- Send Messages: Used to respond to commands with information about the process
-- Embed Links: Provide information about command results
-- Use External Emojis: Text messages are enhanced with custom emojis
-- Add Reactions: Reactions allow users to tell the bot what they want it to do by reacting to prompts
 - Use Slash Commands: The bot is invoked using Slash commands
 
-The permission integer is: `2147765312`.
+The permission integer is: `2147483648`.
 
 the bot invite URL is:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2147765312
+https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2147483648
 ```
 
 This will be printed to the console every time the bot starts.

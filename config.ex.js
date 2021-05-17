@@ -84,7 +84,7 @@ module.exports = {
 		  azureName: "",
 
 		  /**
-		   * The name which users will see and use to refer to your virtual machine. Try not to include words like "server" as the messages generated for users includes specifiers like this already.
+		   * The name which users will see and use to refer to your virtual machine. This must be unique. Try not to include words like "server" as the messages generated for users includes specifiers like this already.
 		   */
 		  friendlyName: "",
 	  }
