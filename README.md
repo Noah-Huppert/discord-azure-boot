@@ -10,6 +10,11 @@ Discord bot which starts and stops game servers running on Azure Virtual Machine
 Allows trusted Discord users to start and stop Azure virtual machines. Useful if you are running a game server on Azure and want to allow friends to turn on the server. This bot also automatically shuts down servers after all users leave the voice chat (only if a user initially requested it turned on).
 
 # Setup
+## Configuration File
+Make a copy of `config.ex.js` named `config.js`. Edit this `config.js` file with your own values, make sure not to commit it to git.
+
+The comments in the example file provide details about each configuration field. Additionally the [Azure Cloud setup](#azure-cloud) and [Discord setup](#discord) sections provide details about how to setup and find these values.
+
 ## Azure Cloud
 Setup an Application in your Active Directory:
 
@@ -39,10 +44,27 @@ Gather information about virtual machines:
 2. Click on the virtual machine you wish to manage with this bot
 3. Save the "Resource group" and virtual machine name for later
 
-## Configuration File
-Make a copy of `config.ex.js` named `config.js`. Edit this `config.js` file with your own values, make sure not to commit it to git.
+## Discord
+Create a new Discord API application with a bot user. Save the bot token for later use.
 
-Use the values saved from the [Azure Cloud setup](#azure-cloud) section.
+Invite the bot with the following permissions:
+
+- View Channels: Used to see if people are still in voice chat, if they aren't the bot will shut down the game server after sending a warning message
+- Send Messages: Used to respond to commands with information about the process
+- Embed Links: Provide information about command results
+- Use External Emojis: Text messages are enhanced with custom emojis
+- Add Reactions: Reactions allow users to tell the bot what they want it to do by reacting to prompts
+- Use Slash Commands: The bot is invoked using Slash commands
+
+The permission integer is: `2147765312`.
+
+the bot invite URL is:
+
+```
+https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2147765312
+```
+
+This will be printed to the console every time the bot starts.
 
 # Development
 Written with NodeJs + Yarn. MongoDB is used to store data about server start requests.
@@ -59,7 +81,7 @@ To start MongoDB a Docker Compose file with MongoDB setup is provided. To start 
 docker-compose up -d
 ```
 
-(You may run your own MongoDB server, just modify the `mongo` configuration values)
+(You may run your own MongoDB server, just modify the `mongodb` configuration values)
 
 Follow instructions in [Setup](#setup) to create the necessary Azure resources and a configuration file.
 

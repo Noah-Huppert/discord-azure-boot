@@ -7,10 +7,13 @@
  "author": "Noah Huppert <contact@noahh.io>",
  "license": "MIT",
  "scripts": {
-  "start": "node index.js"
+  "start": "node --trace-warnings index.js"
  },
  "dependencies": {
   "@azure/arm-compute": "^16.1.0",
-  "@azure/ms-rest-nodeauth": "^3.0.9"
+  "@azure/ms-rest-nodeauth": "^3.0.9",
+  "discord.js": "discordjs/discord.js",
+  "mongodb": "^3.6.6",
+  "winston": "^3.3.3"
  }
 }
