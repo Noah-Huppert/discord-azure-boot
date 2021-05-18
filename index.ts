@@ -1,8 +1,19 @@
-const msRestNodeAuth = require("@azure/ms-rest-nodeauth");
-const { ComputeManagementClient } = require("@azure/arm-compute");
-const { MongoClient } = require("mongodb");
-const Discord = require("discord.js");
-const winston = require("winston");
+import * as msRestNodeAuth from "@azure/ms-rest-nodeauth";
+import { ComputeManagementClient } from "@azure/arm-compute";
+import {
+	MongoClient,
+	Database,
+	Collection,
+} from "mongodb";
+import {
+	Client as DiscordClient,
+	CommandInteraction,
+	Intents as DiscordIntents,
+} from "discord.js";
+import winston from "winston";
+
+import BotConfig, { VMConfig } from "./lib-bot-config";
+import CFG from "./config";
 
 /**
  * The Discord permission integer required for the bot to function. See the Discord section in the README.md for details.
@@ -22,11 +33,29 @@ const VM_POWER_STATE_STOPPED = "PowerState/stopped";
 const VM_POWER_STATE_STOPPING = "PowerState/stopping";
 
 /**
+ * Data serialized about a boot in the database.
+ */
+interface BootData {
+	/**
+	 * The Discord slash command interaction which triggered the boot.
+	 */
+	interaction: CommandInteraction;
+
+	/**
+	 * The virtual machine configuration for the server specified by the user.
+	 */
+	vm_cfg: VMConfig;
+}
+
+/**
  * Represents a request to boot a virtual machine.
  * @field {Bot} bot The bot instance.
  * @field {object} data Data to serialize in database.
  */
 class Boot {
+	bot: Bot;
+	data: BootData;
+	
 	/**
 	 * Construct a boot request.
 	 * @param {Discord Interaction} interaction The Disocrd interaction which triggered this boot.
@@ -34,7 +63,10 @@ class Boot {
 	 */
 	constructor(bot, interaction, vmCfg) {
 		this.bot = bot;
-		this.data = { interaction, vmCfg };
+		this.data = {
+			interaction,
+			vm_cfg: vmCfg,
+		};
 	}
 
 	/**
@@ -43,14 +75,14 @@ class Boot {
 	 */
 	async powerState() {
 		// Get status of virtual machine
-		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vmCfg.resourceGroup, this.data.vmCfg.azureName);
+		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
-		const powerStates = vmInstance.statuses.filter((v) => v.indexOf("PowerState/") !== -1);
+		const powerStates = vmInstance.statuses.filter((v) => v.code.indexOf("PowerState/") !== -1);
 		if (powerStates.length === 0) {
 			return undefined;
 		}
 
-		return powerStates[powerStates.length-1];
+		return powerStates[powerStates.length-1].code;
 	}
 
 	/**
@@ -58,27 +90,57 @@ class Boot {
 	 * @returns {Promise} Resolves when stored.
 	 */
 	async save() {
-		await this.bot.db.boots.updateOne({ this.data.vmCfg }, this.data, { upsert: true });
+		await this.bot.db.boots.updateOne({ vm_cfg: this.data.vm_cfg }, this.data, { upsert: true });
 	}
 
 	/**
 	 * Check the status of the virtual machine and perform the required action to boot it and update the user. Should be called at a regular interval until the virtual machine is booted.
 	 */
 	async poll() {
+		const interaction = new CommandInteraction(this.bot.discord, this.data.interaction);
 		const powerState = await this.powerState();
+		
 		switch (powerState) {
-			case VM_POWER_STATE_
+			case VM_POWER_STATE_DEALLOCATED:
+				interaction.reply("shut down");
+				break;
+			case VM_POWER_STATE_DEALLOCATING:
+				interaction.reply("shutting down");
+				break;
+			case VM_POWER_STATE_RUNNING:
+				interaction.reply("running");
+				break;
+			case VM_POWER_STATE_STARTING:
+				interaction.reply("starting");
+				break;
+			case VM_POWER_STATE_STOPPED:
+				interaction.reply("stopped");
+				break;
+			case VM_POWER_STATE_STOPPING:
+				interaction.reply("stopping");
+				break;
+			default:
+				interaction.reply("unknown");
+				break;
 		}
 	}
 }
 
 class Bot {
+	cfg: BotConfig;
+	log: winston.Logger;
+	azureCompute: ComputeManagementClient;
+	mongoClient: MongoClient;
+	mongoDB: Database;
+	db: BotDB;
+	discord: DiscordClient;
+	
   /**
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
 	 * @param {Winston.Logger} log Parent logger.
 	 */
-  constructor(log) {
-	  this.cfg = require("./config");
+  constructor(cfg, log) {
+	  this.cfg = cfg;
 		this.log = log.child({});
   }
 
@@ -89,9 +151,10 @@ class Bot {
   async init() {
 	  // Authenticate with the Azure API
 		this.log.debug("trying to authenticate with azure");
-	  this.azureCreds = (await msRestNodeAuth.loginWithServicePrincipalSecretWithAuthResponse(this.cfg.azure.applicationID, this.cfg.azure.accessToken, this.cfg.azure.directoryID)).credentials;
+		
+	  const azureCreds = (await msRestNodeAuth.loginWithServicePrincipalSecretWithAuthResponse(this.cfg.azure.applicationID, this.cfg.azure.accessToken, this.cfg.azure.directoryID)).credentials;
 
-	  this.azureCompute = new ComputeManagementClient(this.azureCreds, this.cfg.azure.subscriptionID);
+	  this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
 		this.log.debug("authenticated with azure");
 
 	  // Ensure all the virtual machines the user specified actually exist
@@ -118,13 +181,17 @@ class Bot {
 		this.log.debug(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
 		this.log.debug("trying to connect to discord");
 
-		this.discord = new Discord.Client({
+		this.discord = new DiscordClient({
 			intents: [
-				Discord.Intents.GUILDS,
+				DiscordIntents.FLAGS.GUILDS,
 			],
 		});
 
-		let discordReadyProm = {};
+		let discordReadyProm: {
+			promise: Promise<void>|null,
+			resolve: () => void,
+			reject: () => void
+		} = { promise: null, resolve: () => {}, reject: () => {} };
 		discordReadyProm.promise = new Promise((resolve, reject) => {
 			discordReadyProm.resolve = resolve;
 			discordReadyProm.reject = reject;
@@ -221,8 +288,9 @@ class Bot {
 			const vmCfg = vmSearch[0];
 
 			// Setup Boot instance
-			const boot = new Boot(this, vmCfg);
-			await bot.poll();
+			console.trace(interaction);
+			const boot = new Boot(this, interaction, vmCfg);
+			await boot.poll();
 			await boot.save();
 
 			return;
@@ -231,40 +299,26 @@ class Bot {
 		this.log.warn("unknown interaction type", { interaction });
 	}
 
-	/**
-	 * Process an interaction from the work queue.
-	 * @param {Boot} boot The boot database document.
-	 * @returns {Promise} Resolves when processing interaction is complete. Tries not to block for too long, should be real-time, the caller must set the interval to call.
-	 */
-	async processBoot(boot) {
-		const vmInstance = await this.azureCompute.virtualMachines.instanceView(boot.vmCfg.resourceGroup, boot.vmCfg.azureName);
-		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
-		const powerStates = vmInstance.statuses.filter((v) => v.indexOf("PowerState/") !== -1);
-		let status = "unknown"
-		if (powerStates.length === 0) {
-			
-		}
-		const status = 
-					}
-
-	this.log.warn("unknown interaction type", { interaction });
-}
-
-	}
-
   /**
 	 * Run until an exit signal is sent to the process.
 	 */
   async waitForExit() {
-		await new Promise((resolve, reject) => {
+		await new Promise<void>((resolve, reject) => {
 			process.on("SIGTERM", resolve);
 			process.on("SIGINT", resolve);
 		});
   }
 }
 
+/**
+ * Stores MongoDB database client for database and collections for the Bot class's usage.
+ */
+interface BotDB {
+	boots: Collection;
+}
+
 async function main(log) {
-  const bot = new Bot(log);
+  const bot = new Bot(CFG, log);
   await bot.init();
 
 	await bot.waitForExit();

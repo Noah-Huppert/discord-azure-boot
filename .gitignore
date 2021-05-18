@@ -1,8 +1,13 @@
 # Bot configuration
-config.js
+*config*
+!lib-bot-config.js
+!config.ex.ts
 
 # Node dependencies
 node_modules/
 
 # MongoDB container
 container-data/
+
+# Log files
+*.log

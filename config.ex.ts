@@ -1,4 +1,5 @@
-module.exports = {
+import BotConfig from "./lib-bot-config";
+const cfg: BotConfig = {
   /**
 	 * Azure client information.
 	 */
@@ -90,3 +91,4 @@ module.exports = {
 	  }
   ],
 };
+export default cfg;

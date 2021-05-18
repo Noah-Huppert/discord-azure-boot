@@ -2,12 +2,12 @@
  "name": "discord-azure-boot",
  "version": "0.0.0",
  "description": "Discord bot which starts and stops game servers running on Azure Virtual Machines.",
- "main": "index.js",
+ "main": "index.ts",
  "repository": "git@github.com:Noah-Huppert/discord-azure-boot.git",
  "author": "Noah Huppert <contact@noahh.io>",
  "license": "MIT",
  "scripts": {
-  "start": "node --trace-warnings index.js"
+  "start": "ts-node index.ts"
  },
  "dependencies": {
   "@azure/arm-compute": "^16.1.0",
@@ -15,5 +15,11 @@
   "discord.js": "discordjs/discord.js",
   "mongodb": "^3.6.6",
   "winston": "^3.3.3"
+ },
+ "devDependencies": {
+  "@types/node": "^15.3.0",
+  "discord-api-types": "^0.18.1",
+  "ts-node": "^9.1.1",
+  "typescript": "^4.2.4"
  }
 }
