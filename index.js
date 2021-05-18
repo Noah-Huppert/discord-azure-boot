@@ -14,6 +14,64 @@ const DISCORD_BOT_PERM = 2147483648;
  */
 const BOOT_CMD_NAME = "boot";
 
+const VM_POWER_STATE_DEALLOCATED = "PowerState/deallocated";
+const VM_POWER_STATE_DEALLOCATING = "PowerState/deallocating";
+const VM_POWER_STATE_RUNNING = "PowerState/running";
+const VM_POWER_STATE_STARTING = "PowerState/starting";
+const VM_POWER_STATE_STOPPED = "PowerState/stopped";
+const VM_POWER_STATE_STOPPING = "PowerState/stopping";
+
+/**
+ * Represents a request to boot a virtual machine.
+ * @field {Bot} bot The bot instance.
+ * @field {object} data Data to serialize in database.
+ */
+class Boot {
+	/**
+	 * Construct a boot request.
+	 * @param {Discord Interaction} interaction The Disocrd interaction which triggered this boot.
+	 * @param {object} vmCfg The configuration for a virtual machine found in the configuration file.
+	 */
+	constructor(bot, interaction, vmCfg) {
+		this.bot = bot;
+		this.data = { interaction, vmCfg };
+	}
+
+	/**
+	 * Get the power status of the virtual machine.
+	 * @returns {Promise<string|undefined>} The virtual machine PowerState status. Returns undefined if there are no power states for the virtual machine.
+	 */
+	async powerState() {
+		// Get status of virtual machine
+		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vmCfg.resourceGroup, this.data.vmCfg.azureName);
+		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
+		const powerStates = vmInstance.statuses.filter((v) => v.indexOf("PowerState/") !== -1);
+		if (powerStates.length === 0) {
+			return undefined;
+		}
+
+		return powerStates[powerStates.length-1];
+	}
+
+	/**
+	 * Save in database.
+	 * @returns {Promise} Resolves when stored.
+	 */
+	async save() {
+		await this.bot.db.boots.updateOne({ this.data.vmCfg }, this.data, { upsert: true });
+	}
+
+	/**
+	 * Check the status of the virtual machine and perform the required action to boot it and update the user. Should be called at a regular interval until the virtual machine is booted.
+	 */
+	async poll() {
+		const powerState = await this.powerState();
+		switch (powerState) {
+			case VM_POWER_STATE_
+		}
+	}
+}
+
 class Bot {
   /**
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
@@ -50,7 +108,10 @@ class Bot {
 	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI, { useUnifiedTopology: true });
 	  await this.mongoClient.connect();
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
-		this.bootsColl = this.mongoDB.collection("boots");
+		this.db = {
+			boots: this.mongoDB.collection("boots"),
+		};
+		
 		this.log.debug("connected to mongodb");
 
 		// Connect to Discord
@@ -60,7 +121,6 @@ class Bot {
 		this.discord = new Discord.Client({
 			intents: [
 				Discord.Intents.GUILDS,
-				// Discord.Intents.GUILD_MESSAGES,
 			],
 		});
 
@@ -105,7 +165,7 @@ class Bot {
 			discordReadyProm.resolve();
 		});
 
-		this.discord.on("interaction", this.onInteraction.bind(this));
+		this.discord.on("interaction", this.onDiscordCmd.bind(this));
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
 		this.log.debug("connected to discord");
@@ -120,18 +180,76 @@ class Bot {
   }
 
 	/**
+	 * Fetch the Discord slash commands API client. Fetches a guild specific client if the config discord.guildID field is set.
+	 * @returns {Discord CommandsClient} The Discord commands client.
+	 * @throws {Error} If guildID specified was not found.
+	 */
+	discordCommands() {
+		let cmds = this.discord.application.commands;
+		if (this.cfg.discord.guildID !== null) {
+			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
+
+			if (guild === undefined) {
+				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
+			}
+
+			cmds = guild.commands;
+		}
+
+		return cmds;
+	}
+
+	/**
 	 * Runs whenever a Discord slash command is invoked.
 	 * @param {Discord Interaction} interaction Discord interaction which was just created by a user invoking a bot's slash command.
 	 */
-	async onInteraction(interaction) {
+	async onDiscordCmd(interaction) {
 		// Only handle slash commands
 		if (interaction.isCommand() !== true) {
 			return;
 		}
 
 		if (interaction.commandName === BOOT_CMD_NAME) {
-			interaction.reply("hello slash cmds!");
+			// Find parameters about vm from config
+			const optName = interaction.options[0].value;
+
+			const vmSearch = this.cfg.vms.filter((vm) => vm.friendlyName === optName);
+			if (vmSearch.length !== 1) {
+				throw new Error(`Could not find VM in configuration even though input was constrained by choices`);
+			}
+
+			const vmCfg = vmSearch[0];
+
+			// Setup Boot instance
+			const boot = new Boot(this, vmCfg);
+			await bot.poll();
+			await boot.save();
+
+			return;
 		}
+
+		this.log.warn("unknown interaction type", { interaction });
+	}
+
+	/**
+	 * Process an interaction from the work queue.
+	 * @param {Boot} boot The boot database document.
+	 * @returns {Promise} Resolves when processing interaction is complete. Tries not to block for too long, should be real-time, the caller must set the interval to call.
+	 */
+	async processBoot(boot) {
+		const vmInstance = await this.azureCompute.virtualMachines.instanceView(boot.vmCfg.resourceGroup, boot.vmCfg.azureName);
+		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
+		const powerStates = vmInstance.statuses.filter((v) => v.indexOf("PowerState/") !== -1);
+		let status = "unknown"
+		if (powerStates.length === 0) {
+			
+		}
+		const status = 
+					}
+
+	this.log.warn("unknown interaction type", { interaction });
+}
+
 	}
 
   /**
