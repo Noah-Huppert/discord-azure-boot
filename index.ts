@@ -4,16 +4,24 @@ import {
 	MongoClient,
 	Database,
 	Collection,
+	ObjectId,
 } from "mongodb";
 import {
 	Client as DiscordClient,
 	CommandInteraction,
 	Intents as DiscordIntents,
+	InteractionResponseType,
 } from "discord.js";
 import winston from "winston";
+import fetch from "node-fetch";
 
 import BotConfig, { VMConfig } from "./lib-bot-config";
 import CFG from "./config";
+
+/**
+ * Discord HTTP API base URL.
+ */
+const DISCORD_HTTP_PATH = "https://discord.com/api/v9";
 
 /**
  * The Discord permission integer required for the bot to function. See the Discord section in the README.md for details.
@@ -134,10 +142,10 @@ const VM_POWER_STATE_STOPPING = "PowerState/stopping";
  */
 interface PowerRequestData {
 	/**
-	 * The Discord slash command interaction which triggered the boot.
+	 * Identifier of Discord interaction which triggered request.
 	 */
-	interaction: CommandInteraction;
-
+	interaction_id: InteractionID,
+	
 	/**
 	 * The virtual machine configuration for the server specified by the user.
 	 */
@@ -147,6 +155,83 @@ interface PowerRequestData {
 	 * The target virtual machine power state for the request. This must a terminal state.
 	 */
 	target_power: VMPowerState;
+}
+
+/**
+ * Information identifying a Discord interaction.
+ */
+interface InteractionID {
+	/**
+	 * The ID of the Discord interaction.
+	 */
+	id: string;
+
+	/**
+	 * The token for the Discord interaction.
+	 */
+	token: string;
+}
+
+/**
+ * Wrapper around some Discord slash commands interaction HTTP API calls.
+ */
+class DiscordInteraction {
+	/**
+	 * Bot application context.
+	 */
+	bot: Bot;
+	
+	/**
+	 * Identifier of Discord interaction.
+	 */
+	interaction_id: InteractionID;
+	
+	/**
+	 * Create a new client.
+	 * @param interaction_id Discord interaction identifier.
+	 */
+	constructor(bot: Bot, interaction_id: InteractionID) {
+		this.bot = bot;
+		this.interaction_id = interaction_id;
+	}
+
+	/**
+	 * Create the initial interaction response.
+	 * @param content The response message text content.
+	 * @returns The Discord create initial interaction HTTP API response.
+	 */
+	async newInitResp(content: string): Promise<object> {
+		const resp = await fetch(`${DISCORD_HTTP_PATH}/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bot ${this.bot.discord.token}`,
+			},
+			body: JSON.stringify({
+				type: 4, // ChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
+				data: {
+					content: content,
+				},
+			}),
+		});
+		return await resp.json();
+	}
+
+	/**
+	 * Create a new initial defer response.
+	 * @returns The Discord create initial defered interaction HTTP API response.
+	 */
+	async newDeferResp(): Promise<object> {
+		const resp = await fetch(`${DISCORD_HTTP_PATH}/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bot ${this.bot.discord.token}`,
+			},
+			body: JSON.stringify({
+				type: 5, // DeferredChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
+			}),
+		});
+		return await resp.json();
+	}
 }
 
 /**
@@ -161,6 +246,11 @@ class PowerRequest {
 	bot: Bot;
 
 	/**
+	 * Identifier of the Discord slash command interaction which triggered the boot.
+	 */
+	interaction_id: InteractionID;
+
+	/**
 	 * The data which will be serialized into the database.
 	 */
 	data: PowerRequestData;
@@ -171,10 +261,10 @@ class PowerRequest {
 	 * @param {object} vmCfg The configuration for a virtual machine found in the configuration file.
 	 * @throws {Error} If targetPower is not a terminal state.
 	 */
-	constructor(bot: Bot, interaction: CommandInteraction, vmCfg: VMConfig, targetPower: VMPowerState) {
+	constructor(bot: Bot, interaction_id: InteractionID, vmCfg: VMConfig, targetPower: VMPowerState) {
 		this.bot = bot;
 		this.data = {
-			interaction,
+			interaction_id: interaction_id,
 			vm_cfg: vmCfg,
 			target_power: targetPower,
 		};
@@ -209,7 +299,7 @@ class PowerRequest {
 	 */
 	pk(): object {
 		return {
-			"interaction.id": this.data.interaction.id,
+			"interaction_id.id": this.data.interaction_id.id,
 		};
 	}
 
@@ -218,7 +308,6 @@ class PowerRequest {
 	 * @returns Resolves when stored.
 	 */
 	async save(): Promise<void> {
-		this.bot.log.debug("trying to save", { data: this.data });
 		await this.bot.db.power_requests.updateOne(this.pk(), { $set: this.data }, { upsert: true });
 	}
 
@@ -227,17 +316,24 @@ class PowerRequest {
 	 * @returns Resolves when done processing. 
 	 */
 	async poll(): Promise<void> {
+		const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
+
+		const deferResp = await interactionClient.newDeferResp();
+		this.bot.log.debug("the defer response is", { resp: deferResp });
+		
 		const powerState = await this.powerState();
 		const vmStatePower = vmStateFromPower(powerState);
 
 		// Don't issue any orders to the virtual machine if it is in the middle of doing something
 		if (vmStatePower.terminal === false) {
-			return this.data.interaction.reply(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+			await interactionClient.newInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+			return;
 		}
 
 		// Check if in the final state we requested
 		if (powerState === this.data.target_power) {
-			return this.data.interaction.reply(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+			await interactionClient.newInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+			return;
 		}
 
 		// Otherwise perform action to reach requested state
@@ -255,7 +351,8 @@ class PowerRequest {
 
 		const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
 
-		return this.data.interaction.reply(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
+		await interactionClient.newInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
+		return
 	}
 }
 
@@ -421,7 +518,7 @@ class Bot {
 			const vmCfg = vmSearch[0];
 
 			// Setup Boot instance
-			const powerReq = new PowerRequest(this, interaction, vmCfg, VMPowerState.Running);
+			const powerReq = new PowerRequest(this, { id: interaction.id, token: interaction.token }, vmCfg, VMPowerState.Running);
 			await powerReq.poll();
 			await powerReq.save();
 
