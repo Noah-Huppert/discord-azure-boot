@@ -25,6 +25,103 @@ const DISCORD_BOT_PERM = 2147483648;
  */
 const BOOT_CMD_NAME = "boot";
 
+/**
+ * The power state of an Azure virtual machine.
+ */
+enum VMPowerState {
+	Deallocated = "PowerState/deallocated",
+	Deallocating = "PowerState/deallocating",
+	Running = "PowerState/running",
+	Starting = "PowerState/starting",
+	Stopped = "PowerState/stopped",
+	Stopping = "PowerState/stopping",
+}
+
+/**
+ * Gets the non-terminal state which is related to the terminal state. This function will not work if the power rgument is not a terminal state.
+ * @param power Terminal state for which to fetch non-terminal equivalent.
+ * @returns Non-terminal equivilent.
+ * @throws {Error} If power is a non terminal state.
+ */
+function nonTerminalForPower(power: VMPowerState): VMPowerState {
+	switch (power) {
+		case VMPowerState.Deallocated:
+			return VMPowerState.Deallocating;
+			break;
+		case VMPowerState.Running:
+			return VMPowerState.Starting;
+			break;
+		case VMPowerState.Stopped:
+			return VMPowerState.Stopping;
+			break;
+	}
+
+	throw new Error(`power state ${power} must be terminal, was not`);
+}
+
+/**
+ * Creates a VMState for a VMPowerState.
+ * @param power Power state from which to make VMState.
+ * @returns VMState for power state.
+ */
+function vmStateFromPower(power: VMPowerState): VMState {
+	// Determine if state is terminal
+	let terminal = true;
+	if (power === VMPowerState.Deallocating || power === VMPowerState.Starting || power === VMPowerState.Stopping) {
+		terminal = false;
+	}
+
+	// Map friendly name
+	let friendlyName = "Unknown";
+	
+	switch (power) {
+		case VMPowerState.Deallocated:
+			friendlyName = "Turned Off";
+			break;
+		case VMPowerState.Deallocating:
+			friendlyName = "Turning Off";
+			break;
+		case VMPowerState.Running:
+			friendlyName = "Running";
+			break;
+		case VMPowerState.Starting:
+			friendlyName = "Starting";
+			break;
+		case VMPowerState.Stopped:
+			friendlyName = "Stopped";
+			break;
+		case VMPowerState.Stopping:
+			friendlyName = "Stopping";
+			break;
+	}
+
+	return {
+		code: power,
+		friendlyName: friendlyName,
+		terminal: terminal,
+	};
+}
+
+/**
+ * Describes details of any virtual machine state abstractly.
+ */
+interface VMState {
+	/**
+	 * The logical name of the state which can be used to identify it.
+	 */
+	code: string,
+
+	/**
+	 * A user friendly name for the state. Should be capitalized.
+	 */
+	friendlyName: string,
+
+	/**
+	 * Whether the state is final, and the does not lead to another state. For example "stopped" would be final but "stopping" would not as it would lead to "stopped".
+	 */
+	terminal: boolean,
+}
+
 const VM_POWER_STATE_DEALLOCATED = "PowerState/deallocated";
 const VM_POWER_STATE_DEALLOCATING = "PowerState/deallocating";
 const VM_POWER_STATE_RUNNING = "PowerState/running";
@@ -33,9 +130,9 @@ const VM_POWER_STATE_STOPPED = "PowerState/stopped";
 const VM_POWER_STATE_STOPPING = "PowerState/stopping";
 
 /**
- * Data serialized about a boot in the database.
+ * Data serialized about a power request in the database.
  */
-interface BootData {
+interface PowerRequestData {
 	/**
 	 * The Discord slash command interaction which triggered the boot.
 	 */
@@ -45,35 +142,55 @@ interface BootData {
 	 * The virtual machine configuration for the server specified by the user.
 	 */
 	vm_cfg: VMConfig;
+
+	/**
+	 * The target virtual machine power state for the request. This must a terminal state.
+	 */
+	target_power: VMPowerState;
 }
 
 /**
- * Represents a request to boot a virtual machine.
+ * Represents a request to change the power state of a virtual machine.
  * @field {Bot} bot The bot instance.
  * @field {object} data Data to serialize in database.
  */
-class Boot {
+class PowerRequest {
+	/**
+	 * The bot which holds application contexts.
+	 */
 	bot: Bot;
-	data: BootData;
+
+	/**
+	 * The data which will be serialized into the database.
+	 */
+	data: PowerRequestData;
 	
 	/**
-	 * Construct a boot request.
-	 * @param {Discord Interaction} interaction The Disocrd interaction which triggered this boot.
+	 * Construct a power request.
+	 * @param {Discord Interaction} interaction The Disocrd interaction which triggered this power request.
 	 * @param {object} vmCfg The configuration for a virtual machine found in the configuration file.
+	 * @throws {Error} If targetPower is not a terminal state.
 	 */
-	constructor(bot, interaction, vmCfg) {
+	constructor(bot: Bot, interaction: CommandInteraction, vmCfg: VMConfig, targetPower: VMPowerState) {
 		this.bot = bot;
 		this.data = {
 			interaction,
 			vm_cfg: vmCfg,
+			target_power: targetPower,
 		};
+
+		// Check targetPower is terminal
+		const vmStatePower = vmStateFromPower(targetPower);
+		if (vmStatePower.terminal === false) {
+			throw new Error(`target power "${targetPower}" must be a terminal state`);
+		}
 	}
 
 	/**
 	 * Get the power status of the virtual machine.
-	 * @returns {Promise<string|undefined>} The virtual machine PowerState status. Returns undefined if there are no power states for the virtual machine.
+	 * @returns The virtual machine VMPowerState status. Returns undefined if there are no power states for the virtual machine.
 	 */
-	async powerState() {
+	async powerState(): Promise<VMPowerState|undefined> {
 		// Get status of virtual machine
 		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
@@ -82,47 +199,63 @@ class Boot {
 			return undefined;
 		}
 
-		return powerStates[powerStates.length-1].code;
+		const code = powerStates[powerStates.length-1].code;
+		return VMPowerState[code];
+	}
+
+	/**
+	 * Returns an object used as the primary key in the database.
+	 * @returns Object with primary key fields.
+	 */
+	pk(): object {
+		return {
+			"interaction.id": this.data.interaction.id,
+		};
 	}
 
 	/**
 	 * Save in database.
-	 * @returns {Promise} Resolves when stored.
+	 * @returns Resolves when stored.
 	 */
-	async save() {
-		await this.bot.db.boots.updateOne({ vm_cfg: this.data.vm_cfg }, this.data, { upsert: true });
+	async save(): Promise<void> {
+		this.bot.log.debug("trying to save", { data: this.data });
+		await this.bot.db.power_requests.updateOne(this.pk(), { $set: this.data }, { upsert: true });
 	}
 
 	/**
-	 * Check the status of the virtual machine and perform the required action to boot it and update the user. Should be called at a regular interval until the virtual machine is booted.
+	 * Check the status of the virtual machine and perform the required action to make its power state match the request state. Should be called at a regular interval until the virtual machine is in the correct state.
+	 * @returns Resolves when done processing. 
 	 */
-	async poll() {
-		const interaction = new CommandInteraction(this.bot.discord, this.data.interaction);
+	async poll(): Promise<void> {
 		const powerState = await this.powerState();
-		
+		const vmStatePower = vmStateFromPower(powerState);
+
+		// Don't issue any orders to the virtual machine if it is in the middle of doing something
+		if (vmStatePower.terminal === false) {
+			return this.data.interaction.reply(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+		}
+
+		// Check if in the final state we requested
+		if (powerState === this.data.target_power) {
+			return this.data.interaction.reply(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+		}
+
+		// Otherwise perform action to reach requested state
 		switch (powerState) {
-			case VM_POWER_STATE_DEALLOCATED:
-				interaction.reply("shut down");
+			case VMPowerState.Deallocated:
+				await this.bot.azureCompute.virtualMachines.deallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
-			case VM_POWER_STATE_DEALLOCATING:
-				interaction.reply("shutting down");
+			case VMPowerState.Running:
+				await this.bot.azureCompute.virtualMachines.start(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
-			case VM_POWER_STATE_RUNNING:
-				interaction.reply("running");
-				break;
-			case VM_POWER_STATE_STARTING:
-				interaction.reply("starting");
-				break;
-			case VM_POWER_STATE_STOPPED:
-				interaction.reply("stopped");
-				break;
-			case VM_POWER_STATE_STOPPING:
-				interaction.reply("stopping");
-				break;
-			default:
-				interaction.reply("unknown");
+			case VMPowerState.Stopped:
+				await this.bot.azureCompute.virtualMachines.powerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
 		}
+
+		const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
+
+		return this.data.interaction.reply(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
 	}
 }
 
@@ -172,7 +305,7 @@ class Bot {
 	  await this.mongoClient.connect();
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
 		this.db = {
-			boots: this.mongoDB.collection("boots"),
+			power_requests: this.mongoDB.collection("power_requests"),
 		};
 		
 		this.log.debug("connected to mongodb");
@@ -288,10 +421,9 @@ class Bot {
 			const vmCfg = vmSearch[0];
 
 			// Setup Boot instance
-			console.trace(interaction);
-			const boot = new Boot(this, interaction, vmCfg);
-			await boot.poll();
-			await boot.save();
+			const powerReq = new PowerRequest(this, interaction, vmCfg, VMPowerState.Running);
+			await powerReq.poll();
+			await powerReq.save();
 
 			return;
 		}
@@ -314,7 +446,7 @@ class Bot {
  * Stores MongoDB database client for database and collections for the Bot class's usage.
  */
 interface BotDB {
-	boots: Collection;
+	power_requests: Collection;
 }
 
 async function main(log) {

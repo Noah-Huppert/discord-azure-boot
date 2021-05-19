@@ -12,7 +12,7 @@ Allows trusted Discord users to start and stop Azure virtual machines. Useful if
 
 # Setup
 ## Configuration File
-Make a copy of `config.ex.js` named `config.js`. Edit this `config.js` file with your own values, make sure not to commit it to git.
+Make a copy of `config.ex.ts` named `config.ts`. Edit this `config.ts` file with your own values, make sure not to commit it to git.
 
 The comments in the example file provide details about each configuration field. Additionally the [Azure Cloud setup](#azure-cloud) and [Discord setup](#discord) sections provide details about how to setup and find these values.
 
@@ -63,7 +63,7 @@ https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2
 This will be printed to the console every time the bot starts.
 
 # Development
-Written with NodeJs + Yarn. MongoDB is used to store data about server start requests.
+Written in Typescript. MongoDB is used to store data about server start requests.
 
 Install dependencies:
 
