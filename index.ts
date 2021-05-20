@@ -345,6 +345,11 @@ interface PowerRequestData {
 		current: string;
 
 		/**
+		 * A non-terminal state. This is the first state a power request is set to be in right after it is initialized.
+		 */
+		requested: {},
+
+		/**
 		 * A non-terminal state. Indicates the power change is currently taking place.
 		 */
 		in_progress?: {
@@ -425,7 +430,8 @@ class PowerRequest {
 			vm_cfg: vmCfg,
 			target_power: targetPower,
 			stage: {
-				current: "",
+				current: "requested",
+				requested: {},
 			},
 		};
 
@@ -446,12 +452,14 @@ class PowerRequest {
 
 		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
 		if (vmInstance.statuses === undefined) {
+			this.bot.log.warn("powerState(): vm instance had no .statuses field", { vmInstance });
 			return undefined;
 		}
 		
 		const powerStates = vmInstance.statuses.filter((v) => v.code.indexOf("PowerState/") !== -1);
 
 		if (powerStates.length === 0) {
+			this.bot.log.warn("powerState(): vm instance  no PowerState/ type statuses", { vmInstance });
 			return undefined;
 		}
 
@@ -493,6 +501,19 @@ class PowerRequest {
 		try {
 			const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
 
+			// Get the current state of the VM
+			const powerState = await this.powerState();
+
+			// Check if power request has been marked as started
+			if (this.data.stage.current === "requested") {
+				// Mark as in progress so this power request gets polled in the future
+				this.data.stage.current = "in_progress";
+				this.data.stage.in_progress = {
+					time: moment().valueOf(),
+					start_power: powerState,
+				};
+			}
+
 			// Setup a Discord embed to show the user
 			let targetTitleWord = undefined;
 			let targetColor = undefined;
@@ -533,9 +554,6 @@ class PowerRequest {
 					inline: true,
 				});
 			}
-
-			// Get the current state of the VM
-			const powerState = await this.powerState();
 			
 			if (powerState !== undefined) {
 				const vmStatePower = vmStateFromPower(powerState);
@@ -572,16 +590,10 @@ class PowerRequest {
 					value: "Unknown",
 					inline: true,
 				});
-				this.bot.log.warn("the virtual machine's status was unknown, unsure why this happens", { data: this.data, powerState });
+				// this.bot.log.warn("the virtual machine's status was unknown, unsure why this happens", { data: this.data, powerState });
 			}
 
 			// Otherwise perform action to reach requested state
-			this.data.stage.current = "in_progress";
-			this.data.stage.in_progress = {
-				time: moment().valueOf(),
-				start_power: powerState,
-			};
-
 			switch (this.data.target_power) {
 				case VMPowerState.Deallocated:
 					await this.bot.azureCompute.virtualMachines.beginDeallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
@@ -803,6 +815,13 @@ class Bot {
 
 			// Defer response until PowerRequest.poll() can update it
 			await interaction.defer();
+
+			// Determine if a power request is already running for this vm
+			const otherReqs = await this.db.power_requests.find({ "vm_cfg.friendlyName": vmCfg.friendlyName, "stage.current": "in_progress" }).count();
+			if (otherReqs > 0) {
+				interaction.editReply(`Sorry, the ${vmCfg.friendlyName} server is busy right now. Please wait until other commands are finished working on this server.`);
+				return;
+			}
 
 			// Determine the target power state
 			let targetPower = VMPowerState.Running;
