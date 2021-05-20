@@ -768,7 +768,7 @@ class Bot {
 			
 			const bootCmd = await cmds.create({
 				name: BOOT_CMD_NAME,
-				description: "Request a server be started so you can play on it",
+				description: "Start a game server",
 				options: [
 					{
 						name: "server",
@@ -788,7 +788,7 @@ class Bot {
 
 			const shutdownCmd = await cmds.create({
 				name: SHUTDOWN_CMD_NAME,
-				description: "Request a server be shutdown",
+				description: "Turn off a game server",
 				options: [
 					{
 						name: "server",
