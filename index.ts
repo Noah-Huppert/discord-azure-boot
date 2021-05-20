@@ -13,7 +13,9 @@ import {
 	InteractionResponseType,
 } from "discord.js";
 import winston from "winston";
-import fetch from "node-fetch";
+import fetch, {
+	Response as FetchResponse,
+} from "node-fetch";
 
 import BotConfig, { VMConfig } from "./lib-bot-config";
 import CFG from "./config";
@@ -196,16 +198,38 @@ class DiscordInteraction {
 	}
 
 	/**
+	 * Wrapper which helps perform Discord HTTP API requests by setting the authorization and content type headers. Plus checks the response is okay.
+	 * @param path API endpoint path relative to Discord API base. Include leading slash.
+	 * @param opts Fetch request options.
+	 * @returns Resolves when request completes.
+	 * @throws {Error} If request did not succeed.
+	 */
+	async fetch(path: string, opts: object): Promise<FetchResponse> {
+		if (!("headers" in opts)) {
+			opts["headers"] = {};
+		}
+
+		opts["headers"]["Authorization"] = `Bot ${this.bot.discord.token}`;
+		opts["headers"]["Content-Type"] = "application/json";
+		
+		const resp = await fetch(`${DISCORD_HTTP_PATH}${path}`, opts);
+
+		if (resp.status < 200 || resp.status >= 300) {
+			const body = await resp.text();
+			throw new Error(`Failed to make Discord HTTP API request to ${path}, response had non-okay code ${resp.status}, response body "${body}"`);
+		}
+
+		return resp;
+	}
+
+	/**
 	 * Create the initial interaction response.
 	 * @param content The response message text content.
-	 * @returns The Discord create initial interaction HTTP API response.
+	 * @returns Resolves when the Discord API request completes
 	 */
-	async newInitResp(content: string): Promise<object> {
-		const resp = await fetch(`${DISCORD_HTTP_PATH}/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+	async newInitResp(content: string): Promise<void> {
+		const resp = await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
 			method: "POST",
-			headers: {
-				Authorization: `Bot ${this.bot.discord.token}`,
-			},
 			body: JSON.stringify({
 				type: 4, // ChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
 				data: {
@@ -213,24 +237,33 @@ class DiscordInteraction {
 				},
 			}),
 		});
-		return await resp.json();
 	}
 
 	/**
 	 * Create a new initial defer response.
-	 * @returns The Discord create initial defered interaction HTTP API response.
+	 * @returns Resolves when Discord API request completes.
 	 */
-	async newDeferResp(): Promise<object> {
-		const resp = await fetch(`${DISCORD_HTTP_PATH}/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+	async newDeferResp(): Promise<void> {
+		const resp = await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
 			method: "POST",
-			headers: {
-				Authorization: `Bot ${this.bot.discord.token}`,
-			},
 			body: JSON.stringify({
 				type: 5, // DeferredChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
 			}),
 		});
-		return await resp.json();
+	}
+
+	/**
+	 * Edit the initial interaction response.
+	 * @param content New message content.
+	 * @returns Resolves when edit Discord API call completes.
+	 */
+	async editInitResp(content: string): Promise<void> {
+		const resp = await this.fetch(`/webhooks/${this.bot.cfg.discord.applicationID}/${this.interaction_id.token}/messages/@original`, {
+			method: "PATCH",
+			body: JSON.stringify({
+				content: content,
+			}),
+		});
 	}
 }
 
@@ -316,33 +349,38 @@ class PowerRequest {
 	 * @returns Resolves when done processing. 
 	 */
 	async poll(): Promise<void> {
+		// Initially defer the interaction respone
 		const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
 
-		const deferResp = await interactionClient.newDeferResp();
-		this.bot.log.debug("the defer response is", { resp: deferResp });
-		
+		await interactionClient.newDeferResp();
+
+		// Get the current state of the VM
 		const powerState = await this.powerState();
-		const vmStatePower = vmStateFromPower(powerState);
+		
+		if (powerState !== undefined) {
+			const vmStatePower = vmStateFromPower(powerState);
 
-		// Don't issue any orders to the virtual machine if it is in the middle of doing something
-		if (vmStatePower.terminal === false) {
-			await interactionClient.newInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
-			return;
-		}
+			// Don't issue any orders to the virtual machine if it is in the middle of doing something
+			if (vmStatePower.terminal === false) {
+				await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+				return;
+			}
 
-		// Check if in the final state we requested
-		if (powerState === this.data.target_power) {
-			await interactionClient.newInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
-			return;
+			// Check if in the final state we requested
+			this.bot.log.debug("is the current vm state equal to the target?", { current: powerState, target: this.data.target_power });
+			if (powerState === this.data.target_power) {
+				await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+				return;
+			}
 		}
 
 		// Otherwise perform action to reach requested state
-		switch (powerState) {
+		switch (this.data.target_power) {
 			case VMPowerState.Deallocated:
 				await this.bot.azureCompute.virtualMachines.deallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
 			case VMPowerState.Running:
-				await this.bot.azureCompute.virtualMachines.start(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+				await this.bot.azureCompute.virtualMachines.beginStart(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
 			case VMPowerState.Stopped:
 				await this.bot.azureCompute.virtualMachines.powerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
@@ -351,7 +389,7 @@ class PowerRequest {
 
 		const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
 
-		await interactionClient.newInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
+		await interactionClient.editInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
 		return
 	}
 }
@@ -380,12 +418,12 @@ class Bot {
 	 */
   async init() {
 	  // Authenticate with the Azure API
-		this.log.debug("trying to authenticate with azure");
+		this.log.info("trying to authenticate with azure");
 		
 	  const azureCreds = (await msRestNodeAuth.loginWithServicePrincipalSecretWithAuthResponse(this.cfg.azure.applicationID, this.cfg.azure.accessToken, this.cfg.azure.directoryID)).credentials;
 
 	  this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
-		this.log.debug("authenticated with azure");
+		this.log.info("authenticated with azure");
 
 	  // Ensure all the virtual machines the user specified actually exist
 	  try {
@@ -397,7 +435,7 @@ class Bot {
 	  }
 
 	  // Connect to MongoDB
-		this.log.debug("trying to connect to mongodb");
+		this.log.info("trying to connect to mongodb");
 	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI, { useUnifiedTopology: true });
 	  await this.mongoClient.connect();
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
@@ -405,11 +443,11 @@ class Bot {
 			power_requests: this.mongoDB.collection("power_requests"),
 		};
 		
-		this.log.debug("connected to mongodb");
+		this.log.info("connected to mongodb");
 
 		// Connect to Discord
-		this.log.debug(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
-		this.log.debug("trying to connect to discord");
+		this.log.info(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
+		this.log.info("trying to connect to discord");
 
 		this.discord = new DiscordClient({
 			intents: [
@@ -436,7 +474,7 @@ class Bot {
 				}
 
 				cmds = guild.commands;
-				this.log.debug(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
+				this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
 			}
 			
 			cmds.create({
@@ -458,14 +496,14 @@ class Bot {
 				],
 			});
 
-			this.log.debug("registered discord slash commands");
+			this.log.info("registered discord slash commands");
 			discordReadyProm.resolve();
 		});
 
 		this.discord.on("interaction", this.onDiscordCmd.bind(this));
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
-		this.log.debug("connected to discord");
+		this.log.info("connected to discord");
   }
 
   /**
