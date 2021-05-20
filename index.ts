@@ -493,7 +493,7 @@ class PowerRequest {
 
 			switch (this.data.target_power) {
 				case VMPowerState.Deallocated:
-					await this.bot.azureCompute.virtualMachines.deallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+					await this.bot.azureCompute.virtualMachines.beginDeallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 					break;
 				case VMPowerState.Running:
 					await this.bot.azureCompute.virtualMachines.beginStart(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
