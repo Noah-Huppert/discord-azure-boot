@@ -592,7 +592,7 @@ class PowerRequest {
 
 			const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
 
-			embed.description = `Please wait a moment, the ${this.data.vm_cfg.friendlyName} server just ${actionWord}.`;
+			embed.description = `Please wait a moment, the ${this.data.vm_cfg.friendlyName} server is just ${actionWord} now.`;
 			embed.color = DEC_COLOR_IN_PROGRESS;
 			await sendEmbed();
 			return;
