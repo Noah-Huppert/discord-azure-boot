@@ -2,6 +2,7 @@
 *config*
 !lib-bot-config.js
 !config.ex.ts
+!tsconfig.json
 
 # Node dependencies
 node_modules/
