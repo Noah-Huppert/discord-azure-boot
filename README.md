@@ -22,9 +22,9 @@ Setup an Application in your Active Directory:
 1. Navigate to the "Azure Active Directory" dashboard page
 2. Navigate to the "App Registrations" sub-page under the manage category
 3. Click the "New registration" button to create a new App Registration, select "Accounts in this organizational directory only (Default Directory only - Single tenant)", no redirect URI, then register
-4. On the created App Registration's overview page copy the "Application (client) ID" and "Directory (tenant) ID" for later
+4. On the created App Registration's overview page copy the "Application (client) ID" (for config: `azure.applicationID`) and "Directory (tenant) ID" (for config: `azure.directoryID`) for later
 5. Navigate to the "Certificates & secrets" sub-page of the App Registration, under the manage category
-6. Click the "New Client Secret" button, then hit "Add", copy its value for later use
+6. Click the "New Client Secret" button, then hit "Add", copy its value (for config: `azure.accessToken`) for later use
 
 Give the Application permission to view resources:
 
@@ -43,7 +43,7 @@ Gather information about virtual machines:
 
 1. Navigate to the "Virtual Machines" dashboard page
 2. Click on the virtual machine you wish to manage with this bot
-3. Save the "Resource group" and virtual machine name for later
+3. Save the "Resource group" (for config: `vms.$.resourceGroup`) and virtual machine name (for config: `vms.$.azureName`) for later
 
 ## Discord
 Create a new Discord API application with a bot user. Save the bot token for later use.
