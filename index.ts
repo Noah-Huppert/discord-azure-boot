@@ -445,6 +445,10 @@ class PowerRequest {
 		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 
 		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
+		if (vmInstance.statuses === undefined) {
+			return undefined;
+		}
+		
 		const powerStates = vmInstance.statuses.filter((v) => v.code.indexOf("PowerState/") !== -1);
 
 		if (powerStates.length === 0) {
@@ -666,6 +670,7 @@ class Bot {
 
 		// Connect to Discord
 		this.log.info(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
+		this.log.info(`authorize the discord api application via oauth2: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=applications.commands`);
 		this.log.info("trying to connect to discord");
 
 		this.discord = new DiscordClient({

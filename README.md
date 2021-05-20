@@ -64,6 +64,18 @@ https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2
 
 This will be printed to the console every time the bot starts.
 
+Authorize the application via OAuth2. This is separate from the bot, and provides the overall Discord API application access. Authorize with the OAuth2 scopes:
+
+- `applications.commands`: Used to manage slash commands
+
+This can be done by visiting a URL in the form:
+
+```
+https://discord.com/api/oauth2/authorize?client_id=<...>&scope=applications.commands
+```
+
+This will be printed to the console every time the bot starts.
+
 # Development
 Written in Typescript. MongoDB is used to store data about server start requests.
 
