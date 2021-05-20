@@ -514,8 +514,21 @@ class PowerRequest {
 			};
 
 			const sendEmbed = async () => {
+				embed.fields.reverse();
 				await interactionClient.editInitResp(undefined, [ embed ]);
 			};
+
+			if ("in_progress" in this.data.stage) {
+				const startT = moment.unix(this.data.stage.in_progress.time/1000);
+				const now = moment();
+				const runT = moment.utc(now.diff(startT)).format("mm:ss");
+
+				embed.fields.push({
+					name: "Duration",
+					value: runT,
+					inline: true,
+				});
+			}
 
 			// Get the current state of the VM
 			const powerState = await this.powerState();
@@ -560,8 +573,9 @@ class PowerRequest {
 
 			// Otherwise perform action to reach requested state
 			this.data.stage.current = "in_progress";
-			this.data.stage.success = {
+			this.data.stage.in_progress = {
 				time: moment().valueOf(),
+				start_power: powerState,
 			};
 
 			switch (this.data.target_power) {
