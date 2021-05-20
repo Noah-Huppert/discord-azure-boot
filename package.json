@@ -13,6 +13,7 @@
   "@azure/arm-compute": "^16.1.0",
   "@azure/ms-rest-nodeauth": "^3.0.9",
   "discord.js": "discordjs/discord.js",
+  "moment": "^2.29.1",
   "mongodb": "^3.6.6",
   "node-fetch": "^2.6.1",
   "winston": "^3.3.3"

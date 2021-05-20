@@ -16,9 +16,15 @@ import winston from "winston";
 import fetch, {
 	Response as FetchResponse,
 } from "node-fetch";
+import moment from "moment";
 
 import BotConfig, { VMConfig } from "./lib-bot-config";
 import CFG from "./config";
+
+/**
+ * The interval at which ongoing power requests will be polled. In milliseconds.
+ */
+const ONGOING_POWER_REQUEST_INTERVAL = 5000;
 
 /**
  * Discord HTTP API base URL.
@@ -175,26 +181,6 @@ interface VMState {
 }
 
 /**
- * Data serialized about a power request in the database.
- */
-interface PowerRequestData {
-	/**
-	 * Identifier of Discord interaction which triggered request.
-	 */
-	interaction_id: InteractionID,
-	
-	/**
-	 * The virtual machine configuration for the server specified by the user.
-	 */
-	vm_cfg: VMConfig;
-
-	/**
-	 * The target virtual machine power state for the request. This must a terminal state.
-	 */
-	target_power: VMPowerState;
-}
-
-/**
  * Information identifying a Discord interaction.
  */
 interface InteractionID {
@@ -303,6 +289,81 @@ class DiscordInteraction {
 }
 
 /**
+ * Data serialized about a power request in the database.
+ */
+interface PowerRequestData {
+	/**
+	 * Identifier of Discord interaction which triggered request.
+	 */
+	interaction_id: InteractionID;
+	
+	/**
+	 * The virtual machine configuration for the server specified by the user.
+	 */
+	vm_cfg: VMConfig;
+
+	/**
+	 * The target virtual machine power state for the request. This must a terminal state.
+	 */
+	target_power: VMPowerState;
+
+	/**
+	 * Details about the current state of the power change process.
+	 */
+	stage: {
+		/**
+		 * The key in this stage object which holds information about the current stage.
+		 */
+		current: string;
+
+		/**
+		 * A non-terminal state. Indicates the power change is currently taking place.
+		 */
+		in_progress?: {
+			/**
+			 * The unix time when the progress began.
+			 */
+			time: number;
+
+			/**
+			 * The virtual machine's power state before the power request started any changes.
+			 */
+			start_power: VMPowerState;
+		};
+
+		/**
+		 * A terminal state. Indicates the power change succeeded.
+		 */
+		success?: {
+			/**
+			 * The unix time when the success occurred.
+			 */
+			time: number;
+		};
+
+		/**
+		 * A terminal state. Indicates an error occurred during the power change process.
+		 */
+		error?: {
+			/**
+			 * The unix time when the error occurred.
+			 */
+			time: number;
+			
+			/**
+			 * Internal error details. Not to be shown to the user.
+			 */
+			internal: string;
+
+			/**
+			 * User friendly error message.
+			 */
+			user: string;
+		};
+	};
+}
+
+/**
  * Represents a request to change the power state of a virtual machine.
  * @field {Bot} bot The bot instance.
  * @field {object} data Data to serialize in database.
@@ -335,6 +396,9 @@ class PowerRequest {
 			interaction_id: interaction_id,
 			vm_cfg: vmCfg,
 			target_power: targetPower,
+			stage: {
+				current: "",
+			},
 		};
 
 		// Check targetPower is terminal
@@ -382,51 +446,83 @@ class PowerRequest {
 	}
 
 	/**
+	 * Load .data field values from the database.
+	 * @returns Resolves when .data field has been loaded.
+	 */
+	async load(): Promise<void> {
+		this.data = await this.bot.db.power_requests.findOne(this.pk());
+	}
+
+	/**
 	 * Check the status of the virtual machine and perform the required action to make its power state match the request state. Should be called at a regular interval until the virtual machine is in the correct state.
 	 * @returns Resolves when done processing. 
 	 */
 	async poll(): Promise<void> {
-		const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
+		try {
+			const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
 
-		// Get the current state of the VM
-		const powerState = await this.powerState();
-		
-		if (powerState !== undefined) {
-			const vmStatePower = vmStateFromPower(powerState);
+			// Get the current state of the VM
+			const powerState = await this.powerState();
+			
+			if (powerState !== undefined) {
+				const vmStatePower = vmStateFromPower(powerState);
 
-			// Don't issue any orders to the virtual machine if it is in the middle of doing something
-			if (vmStatePower.terminal === false) {
-				await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
-				return;
+				// Don't issue any orders to the virtual machine if it is in the middle of doing something
+				if (vmStatePower.terminal === false) {
+					await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+					return;
+				}
+
+				// Check if in the final state we requested
+				if (powerState === this.data.target_power) {
+					this.data.stage.current = "success";
+					this.data.stage.success = {
+						time: moment().valueOf(),
+					};
+
+					await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+					return;
+				}
 			}
 
-			// Check if in the final state we requested
-			if (powerState === this.data.target_power) {
-				await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
-				return;
+			// Otherwise perform action to reach requested state
+			this.data.stage.current = "in_progress";
+			this.data.stage.success = {
+				time: moment().valueOf(),
+			};
+
+			switch (this.data.target_power) {
+				case VMPowerState.Deallocated:
+					await this.bot.azureCompute.virtualMachines.deallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+					break;
+				case VMPowerState.Running:
+					await this.bot.azureCompute.virtualMachines.beginStart(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+					break;
+				case VMPowerState.Stopped:
+					await this.bot.azureCompute.virtualMachines.beginPowerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+					break;
 			}
+
+			const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
+
+			await interactionClient.editInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
+			return;
+		} catch (e) {
+			this.bot.log.error("failed to poll PowerRequest", { error: e, data: this.data });
+			
+			this.data.stage.current = "error";
+			this.data.stage.error = {
+				time: moment().valueOf(),
+				internal: e,
+				user: "an unexpected error occurred",
+			};
 		}
-
-		// Otherwise perform action to reach requested state
-		switch (this.data.target_power) {
-			case VMPowerState.Deallocated:
-				await this.bot.azureCompute.virtualMachines.deallocate(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
-				break;
-			case VMPowerState.Running:
-				await this.bot.azureCompute.virtualMachines.beginStart(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
-				break;
-			case VMPowerState.Stopped:
-				await this.bot.azureCompute.virtualMachines.beginPowerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
-				break;
-		}
-
-		const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
-
-		await interactionClient.editInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
-		return
 	}
 }
 
+/**
+ * Provides bot functionality. The init() method must be called before anything else can be called.
+ */
 class Bot {
 	cfg: BotConfig;
 	log: winston.Logger;
@@ -435,6 +531,7 @@ class Bot {
 	mongoDB: Database;
 	db: BotDB;
 	discord: DiscordClient;
+	pollOngoingInterval: NodeJS.Timeout;
 	
   /**
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
@@ -553,12 +650,18 @@ class Bot {
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
 		this.log.info("connected to discord");
+
+		// Setup poll ongoing interval
+		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
   }
 
   /**
 	 * Gracefully stop.
 	 */
   async cleanup() {
+		// Stop poll ongoing interval
+		clearInterval(this.pollOngoingInterval);
+		
 	  // Disconnect from MongoDB
 	  this.mongoClient.close();
   }
@@ -622,6 +725,26 @@ class Bot {
 		}
 
 		this.log.warn("unknown interaction type", { interaction });
+	}
+
+	/**
+	 * Retrieve on-going power requests from the database and run their poll() method.
+	 */
+	async pollOngoing() {
+		const ongoing = await this.db.power_requests.find({
+			"stage.current": "in_progress",
+		}).toArray();
+
+		await Promise.all(ongoing.map(async (data) => {
+			const power_req = new PowerRequest(this, data.interaction_id, data.vm_cfg, data.target_power);
+			await power_req.load();
+
+			this.log.debug("polling power request", { interaction_id_id: power_req.data.interaction_id.id });
+
+			await power_req.poll();
+
+			await power_req.save();
+		}));
 	}
 
   /**
