@@ -570,7 +570,6 @@ class PowerRequest {
 					}).reduce((accm, v) => accm + v);
 					const avrgMs = totalDiffs / otherReqs.length;
 					const avrgT = moment.unix(avrgMs/1000);
-					this.bot.log.debug("not working", { avrgMs, avrgT, totalDiffs, otherReqs_length: otherReqs.length });
 					const avrgDurStr = moment.utc(avrgT).format("mm:ss");
 
 					estStr = ` (est. ${avrgDurStr})`;
