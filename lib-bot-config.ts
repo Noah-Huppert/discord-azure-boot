@@ -94,3 +94,23 @@ export interface VMConfig {
 	 */
 	friendlyName: string;
 }
+
+/**
+ * Find a virtual machine configuration with a matching friendly name.
+ * @param cfg The bot configuration to search.
+ * @param name The virtual machine's friendly name to find.
+ * @returns The virtual machine's configuration.
+ * @throws {Error} If none or more than one virtual machine configuration blocks were found with a matching friendly name.
+ */
+export function vmCfgByFriendlyName(cfg: BotConfig, name: string): VMConfig {
+	const vmSearch = cfg.vms.filter((vm) => vm.friendlyName === name);
+	if (vmSearch.length === 0) {
+		throw new Error(`could not find virtual machine configuration with friendly name "${name}"`);
+	}
+	
+	if (vmSearch.length > 1) {
+		throw new Error(`found more than one virtual machine configuration with friendly name "${name}", this should not happen as these friendly names should be unique`);
+	}
+
+	return vmSearch[0];
+}
