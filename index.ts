@@ -12,6 +12,7 @@ import {
 	Intents as DiscordIntents,
 	InteractionResponseType,
 	MessageEmbedOptions,
+	TextChannel,
 } from "discord.js";
 import winston from "winston";
 import fetch, {
@@ -317,94 +318,107 @@ class DiscordInteraction {
 }
 
 /**
- * Data serialized about a power request in the database.
+ * A Discord message which can be editted to show the user the current status of an ongoing operation. This message can either be 
  */
-interface PowerRequestData {
+class DiscordCtrlMsg {
 	/**
-	 * Identifier of Discord interaction which triggered request.
+	 * Application context.
 	 */
-	interaction_id: InteractionID;
+	bot: Bot;
 	
 	/**
-	 * The virtual machine configuration for the server specified by the user.
+	 * Identifier of control message.
 	 */
-	vm_cfg: VMConfig;
+	id: DiscordCtrlMsgID;
+
+	constructor(bot: Bot, id: DiscordCtrlMsgID) {
+		this.bot = bot;
+		this.id = id;
+	}
 
 	/**
-	 * The target virtual machine power state for the request. This must a terminal state.
+	 * Edit the message's contents.
+	 * @returns Resolves when message has been successfully edited.
+	 * @throws {Error} If the message could not be found or could not be edited.
 	 */
-	target_power: VMPowerState;
+	async edit(content: string, embed?: MessageEmbedOptions): Promise<void> {
+		switch (this.id.ctrl_type) {
+			case DISCORD_CTRL_PLAIN_MSG:
+				// If a regular Discord message, get it
+				const guild = await this.bot.discord.guilds.cache.get(this.id.guildID);
+				if (guild === undefined) {
+					throw new Error(`could not edit message as its guild with ID ${this.id.guildID} could not be found`);
+				}
+				
+				const channel = await guild.channels.cache.get(this.id.channelID);
+				if (channel === undefined) {
+					throw new Error(`could not edit message as its channel with ID ${this.id.channelID} could not be found`);
+				}
+				
+				if (channel.isText() === true) {
+					const msg = await (channel as TextChannel).messages.cache.get(this.id.msgID);
 
-	/**
-	 * Details about the current state of the power change process.
-	 */
-	stage: {
-		/**
-		 * The key in this stage object which holds information about the current stage.
-		 */
-		current: string;
-
-		/**
-		 * A variable which is inverted every time the power request is polled. This allows for 2 frame animations. Will be initialized to true.
-		 */
-		flip_flop: boolean,
-
-		/**
-		 * A non-terminal state. This is the first state a power request is set to be in right after it is initialized.
-		 */
-		requested: {},
-
-		/**
-		 * A non-terminal state. Indicates the power change is currently taking place.
-		 */
-		in_progress?: {
-			/**
-			 * The unix time when the progress began.
-			 */
-			time: number;
-
-			/**
-			 * The virtual machine's power state before the power request started any changes.
-			 */
-			start_power: VMPowerState;
-		};
-
-		/**
-		 * A terminal state. Indicates the power change succeeded.
-		 */
-		success?: {
-			/**
-			 * The unix time when the success occurred.
-			 */
-			time: number;
-		};
-
-		/**
-		 * A terminal state. Indicates an error occurred during the power change process.
-		 */
-		error?: {
-			/**
-			 * The unix time when the error occurred.
-			 */
-			time: number;
-			
-			/**
-			 * Internal error details. Not to be shown to the user.
-			 */
-			internal: string;
-
-			/**
-			 * User friendly error message.
-			 */
-			user: string;
-		};
-	};
+					// Then edit
+					await msg.edit(content, { embed });
+				} else {
+					throw new Error(`could not edit message as its channel with ID ${this.id.channelID} was not a text channel`);
+				}
+				break;
+			case DISCORD_CTRL_INTERACTION:
+				// Create interaction client and edit message
+				const interaction = new DiscordInteraction(this.bot, this.id);
+				await interaction.editInitResp(content, [embed]);
+				break;
+		}
+	}
 }
 
 /**
+ * Indentifies a Discord message to use as a control message. Can either be a vanilla message or an interaction.
+ */
+type DiscordCtrlMsgID = DiscordCtrlPlainMsgID | DiscordCtrlInteractionID;
+
+/**
+ * Identifies a regular Discord message as the control message.
+ */
+type DiscordCtrlPlainMsgID = {
+	ctrl_type: "PLAIN_MSG";
+
+	/**
+	 * ID of the Discord guild in which this message exists.
+	 */
+	guildID: string;
+
+	/**
+	 * ID of the Discord channel in which this message exists.
+	 */
+	channelID: string;
+
+	/**
+	 * ID of the Discord message.
+	 */
+	msgID: string;
+};
+
+/**
+ * Identifies a DiscordCtrlMsgID as a DiscordCtrlPlainMsgID.
+ */
+const DISCORD_CTRL_PLAIN_MSG = "PLAIN_MSG";
+
+/**
+ * Identifies a Discord interaction to use as the control message.
+ */
+interface DiscordCtrlInteractionID extends InteractionID {
+	ctrl_type: "INTERACTION";
+}
+
+/**
+ * Identifies a DiscordCtrlMsgID as a DiscordCtrlInteractionID.
+ */
+const DISCORD_CTRL_INTERACTION = "INTERACTION";
+
+/**
  * Represents a request to change the power state of a virtual machine.
- * @field {Bot} bot The bot instance.
- * @field {object} data Data to serialize in database.
  */
 class PowerRequest {
 	/**
@@ -413,25 +427,22 @@ class PowerRequest {
 	bot: Bot;
 
 	/**
-	 * Identifier of the Discord slash command interaction which triggered the boot.
-	 */
-	interaction_id: InteractionID;
-
-	/**
 	 * The data which will be serialized into the database.
 	 */
 	data: PowerRequestData;
 	
 	/**
 	 * Construct a power request.
-	 * @param {Discord Interaction} interaction The Disocrd interaction which triggered this power request.
-	 * @param {object} vmCfg The configuration for a virtual machine found in the configuration file.
+	 * @param bot Bot application context.
+	 * @param ctrlMsgID Identifier of a Discord message which will be used to interact with the user.
+	 * @param vmCfg The configuration of the virtual machine this power request modify.
+	 * @param targetPower The power state which the request will try to make the virtual machine reach.
 	 * @throws {Error} If targetPower is not a terminal state.
 	 */
-	constructor(bot: Bot, interaction_id: InteractionID, vmCfg: VMConfig, targetPower: VMPowerState) {
+	constructor(bot: Bot, ctrlMsgID: DiscordCtrlMsgID, vmCfg: VMConfig, targetPower: VMPowerState) {
 		this.bot = bot;
 		this.data = {
-			interaction_id: interaction_id,
+			ctrl_msg_id: ctrlMsgID,
 			vm_cfg: vmCfg,
 			target_power: targetPower,
 			stage: {
@@ -479,7 +490,7 @@ class PowerRequest {
 	 */
 	pk(): object {
 		return {
-			"interaction_id.id": this.data.interaction_id.id,
+			"ctrl_msg_id": this.data.ctrl_msg_id,
 		};
 	}
 
@@ -507,8 +518,8 @@ class PowerRequest {
 		try {
 			// Flip the flip flopper (used for two frame animations over responses)
 			this.data.stage.flip_flop = !this.data.stage.flip_flop;
-			
-			const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
+
+			const ctrlMsgClient = new DiscordCtrlMsg(this.bot, this.data.ctrl_msg_id);
 
 			// Get the current state of the VM
 			const powerState = await this.powerState();
@@ -554,7 +565,7 @@ class PowerRequest {
 
 			const sendEmbed = async () => {
 				embed.fields.reverse();
-				await interactionClient.editInitResp(undefined, [ embed ]);
+				await ctrlMsgClient.edit(undefined, embed);
 			};
 
 			// Duration fields
@@ -660,8 +671,8 @@ class PowerRequest {
 
 			// See if we can reach the user and tell then something happened
 			try {
-				const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
-				await interactionClient.editInitResp(`:warning: Sorry, ${this.data.stage.error.user}.`);
+				const ctrlMsgClient = new DiscordCtrlMsg(this.bot, this.data.ctrl_msg_id);
+				await ctrlMsgClient.edit(`:warning: Sorry, ${this.data.stage.error.user}.`);
 				return;
 			} catch (e) {
 				this.bot.log.error("while trying to inform the user of the failed power request encountered the error", { error: e });
@@ -669,6 +680,111 @@ class PowerRequest {
 			}
 		}
 	}
+}
+
+/**
+ * Data serialized about a power request in the database.
+ */
+interface PowerRequestData {
+	/**
+	 * Identifier of a Discord message which will be used to interact with the user.
+	 */
+	ctrl_msg_id: DiscordCtrlMsgID;
+	
+	/**
+	 * The virtual machine configuration for the server specified by the user.
+	 */
+	vm_cfg: VMConfig;
+
+	/**
+	 * The target virtual machine power state for the request. This must a terminal state.
+	 */
+	target_power: VMPowerState;
+
+	/**
+	 * Details about the current state of the power change process.
+	 */
+	stage: {
+		/**
+		 * The key in this stage object which holds information about the current stage.
+		 */
+		current: string;
+
+		/**
+		 * A variable which is inverted every time the power request is polled. This allows for 2 frame animations. Will be initialized to true.
+		 */
+		flip_flop: boolean,
+
+		/**
+		 * A non-terminal state. This is the first state a power request is set to be in right after it is initialized.
+		 */
+		requested: {},
+
+		/**
+		 * A non-terminal state. Indicates the power change is currently taking place.
+		 */
+		in_progress?: {
+			/**
+			 * The unix time when the progress began.
+			 */
+			time: number;
+
+			/**
+			 * The virtual machine's power state before the power request started any changes.
+			 */
+			start_power: VMPowerState;
+		};
+
+		/**
+		 * A terminal state. Indicates the power change succeeded.
+		 */
+		success?: {
+			/**
+			 * The unix time when the success occurred.
+			 */
+			time: number;
+		};
+
+		/**
+		 * A terminal state. Indicates an error occurred during the power change process.
+		 */
+		error?: {
+			/**
+			 * The unix time when the error occurred.
+			 */
+			time: number;
+			
+			/**
+			 * Internal error details. Not to be shown to the user.
+			 */
+			internal: string;
+
+			/**
+			 * User friendly error message.
+			 */
+			user: string;
+		};
+	};
+}
+
+/**
+ * A request from a user to boot a server. Starts the server then automatically stops the server later.
+ */
+class BootRequest {
+	/**
+	 * Bot which holds application context.
+	 */
+	bot: Bot;
+}
+
+/**
+ * Boot request information which is stored in the database.
+ */
+interface BootRequestData {
+	/**
+	 * The virtual machine which the user requested be started.
+	 */
+	vm_cfg: VMConfig;
 }
 
 /**
@@ -759,12 +875,18 @@ class Bot {
 				this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
 			}
 
+			if (this.cfg.discord.permissionRoleID !== null) {
+				this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
+			}
+
 			const VM_CHOICES = this.cfg.vms.map((vm) => {
 				return {
 					name: vm.friendlyName,
 					value: vm.friendlyName,
 				};
 			});
+
+			const useDefaultPerms = this.cfg.discord.permissionRoleID === null;
 			
 			const bootCmd = await cmds.create({
 				name: BOOT_CMD_NAME,
@@ -778,13 +900,15 @@ class Bot {
 						choices: VM_CHOICES,
 					},
 				],
-				defaultPermission: false,
+				defaultPermission: useDefaultPerms,
 			});
-			await cmds.setPermissions(bootCmd, [{
-				type: "ROLE",
-				id: this.cfg.discord.permissionRoleID,
-				permission: true,
-			}]);
+			if (this.cfg.discord.permissionRoleID !== null) {
+				await cmds.setPermissions(bootCmd, [{
+					type: "ROLE",
+					id: this.cfg.discord.permissionRoleID,
+					permission: true,
+				}]);
+			}
 
 			const shutdownCmd = await cmds.create({
 				name: SHUTDOWN_CMD_NAME,
@@ -798,13 +922,15 @@ class Bot {
 						choices: VM_CHOICES,
 					},
 				],
-				defaultPermission: false,
+				defaultPermission: useDefaultPerms,
  			});
-			await cmds.setPermissions(shutdownCmd, [{
-				type: "ROLE",
-				id: this.cfg.discord.permissionRoleID,
-				permission: true,
-			}]);
+			if (this.cfg.discord.permissionRoleID !== null) {
+				await cmds.setPermissions(shutdownCmd, [{
+					type: "ROLE",
+					id: this.cfg.discord.permissionRoleID,
+					permission: true,
+				}]);
+			}
 
 			this.log.info("registered discord slash commands");
 			discordReadyProm.resolve();
@@ -817,6 +943,7 @@ class Bot {
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
+		this.log.info("setup polling");
   }
 
   /**
@@ -888,7 +1015,7 @@ class Bot {
 			}
 
 			// Setup power request
-			const powerReq = new PowerRequest(this, { id: interaction.id, token: interaction.token }, vmCfg, targetPower);
+			const powerReq = new PowerRequest(this, { ctrl_type: DISCORD_CTRL_INTERACTION, id: interaction.id, token: interaction.token }, vmCfg, targetPower);
 			await powerReq.poll();
 			await powerReq.save();
 
@@ -907,10 +1034,10 @@ class Bot {
 		}).toArray();
 
 		await Promise.all(ongoing.map(async (data) => {
-			const power_req = new PowerRequest(this, data.interaction_id, data.vm_cfg, data.target_power);
+			const power_req = new PowerRequest(this, data.ctrl_msg_id, data.vm_cfg, data.target_power);
 			await power_req.load();
 
-			this.log.debug("polling power request", { interaction_id_id: power_req.data.interaction_id.id });
+			this.log.debug("polling power request", { ctrl_msg_id: power_req.data.ctrl_msg_id });
 
 			await power_req.poll();
 
