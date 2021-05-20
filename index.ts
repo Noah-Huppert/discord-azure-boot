@@ -55,19 +55,19 @@ const VM_POWER_STATE_STOPPED = "PowerState/stopped";
 const VM_POWER_STATE_STOPPING = "PowerState/stopping";
 
 /**
- * Color which represents an action in progress. Decimal version of hex code #e6e630.
+ * Color which represents an action in progress. Decimal version of hex code #ffff75 (old #e6e630).
  */
-const DEC_COLOR_IN_PROGRESS = 15132208;
+const DEC_COLOR_IN_PROGRESS = 16777077;
 
 /**
- * Color which shows something is being turned on. Decimal version of hex code #39e630.
+ * Color which shows something is being turned on. Decimal version of hex code #7cff75 (old #39e630).
  */
-const DEC_COLOR_START = 3794480;
+const DEC_COLOR_START = 8191861;
 
 /**
- * Color which shows something is being turned off. Decimal version of hex code #e01f1f.
+ * Color which shows something is being turned off. Decimal version of hex code #ff6161 (old #e01f1f).
  */
-const DEC_COLOR_STOP = 14688031;
+const DEC_COLOR_STOP = 16736609;
 
 /**
  * The power state of an Azure virtual machine.
@@ -345,6 +345,11 @@ interface PowerRequestData {
 		current: string;
 
 		/**
+		 * A variable which is inverted every time the power request is polled. This allows for 2 frame animations. Will be initialized to true.
+		 */
+		flip_flop: boolean,
+
+		/**
 		 * A non-terminal state. This is the first state a power request is set to be in right after it is initialized.
 		 */
 		requested: {},
@@ -431,6 +436,7 @@ class PowerRequest {
 			target_power: targetPower,
 			stage: {
 				current: "requested",
+				flip_flop: true,
 				requested: {},
 			},
 		};
@@ -499,6 +505,9 @@ class PowerRequest {
 	 */
 	async poll(): Promise<void> {
 		try {
+			// Flip the flip flopper (used for two frame animations over responses)
+			this.data.stage.flip_flop = !this.data.stage.flip_flop;
+			
 			const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
 
 			// Get the current state of the VM
@@ -523,13 +532,18 @@ class PowerRequest {
 					targetColor = DEC_COLOR_STOP;
 					break;
 				case VMPowerState.Running:
-					targetTitleWord = ":racehorse: Start";
+					targetTitleWord = ":rocket: Start";
 					targetColor = DEC_COLOR_START;
 					break;
 				case VMPowerState.Stopped:
 					targetTitleWord = ":pause_button: Suspend";
 					targetColor = DEC_COLOR_STOP;
 					break;
+			}
+
+			let waitEmoji = ":hourglass:";
+			if (this.data.stage.flip_flop === false) {
+				waitEmoji = ":hourglass_flowing_sand:";
 			}
 			
 			let embed: MessageEmbedOptions = {
@@ -543,14 +557,33 @@ class PowerRequest {
 				await interactionClient.editInitResp(undefined, [ embed ]);
 			};
 
+			// Duration fields
 			if ("in_progress" in this.data.stage) {
+				// Estimate duration from past invocations
+				let estStr = "";
+				
+				const otherReqs = await this.bot.db.power_requests.find({ vm_cfg: this.data.vm_cfg, "stage.current": "success", "stage.in_progress.start_power": this.data.stage.in_progress.start_power }, { "stage.in_progress.time": true, "stage.success.time": true }).limit(10).toArray();
+				
+				if (otherReqs.length > 0) {
+					const totalDiffs = otherReqs.map((doc) => {
+							return doc.stage.success.time - doc.stage.in_progress.time;
+					}).reduce((accm, v) => accm + v);
+					const avrgMs = totalDiffs / otherReqs.length;
+					const avrgT = moment.unix(avrgMs/1000);
+					this.bot.log.debug("not working", { avrgMs, avrgT, totalDiffs, otherReqs_length: otherReqs.length });
+					const avrgDurStr = moment.utc(avrgT).format("mm:ss");
+
+					estStr = ` (est. ${avrgDurStr})`;
+				}
+					
+				// Current duration
 				const startT = moment.unix(this.data.stage.in_progress.time/1000);
 				const now = moment();
 				const runT = moment.utc(now.diff(startT)).format("mm:ss");
 
 				embed.fields.push({
 					name: "Duration",
-					value: runT,
+					value: `${runT}${estStr}`,
 					inline: true,
 				});
 			}
@@ -558,9 +591,12 @@ class PowerRequest {
 			if (powerState !== undefined) {
 				const vmStatePower = vmStateFromPower(powerState);
 				// Show user the current state
+				if (powerState === this.data.target_power) {
+					waitEmoji = ":sparkles:";
+				}
 				embed.fields.push({
 					name: "Server Status",
-					value: vmStatePower.friendlyName,
+					value: `${waitEmoji} ${vmStatePower.friendlyName}`,
 					inline: true,
 				});
 
@@ -587,7 +623,7 @@ class PowerRequest {
 				// We don't know the virtual machine's power state, this could happen maybe when a vm is first created?
 				embed.fields.push({
 					name: "Server Status",
-					value: "Unknown",
+					value: `${waitEmoji} Unknown`,
 					inline: true,
 				});
 				// this.bot.log.warn("the virtual machine's status was unknown, unsure why this happens", { data: this.data, powerState });
@@ -613,6 +649,7 @@ class PowerRequest {
 			await sendEmbed();
 			return;
 		} catch (e) {
+			// Record error safely
 			this.bot.log.error("failed to poll PowerRequest", { error: e, data: this.data });
 			
 			this.data.stage.current = "error";
@@ -621,6 +658,16 @@ class PowerRequest {
 				internal: e,
 				user: "an unexpected error occurred",
 			};
+
+			// See if we can reach the user and tell then something happened
+			try {
+				const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
+				await interactionClient.editInitResp(`:warning: Sorry, ${this.data.stage.error.user}.`);
+				return;
+			} catch (e) {
+				this.bot.log.error("while trying to inform the user of the failed power request encountered the error", { error: e });
+				return;
+			}
 		}
 	}
 }
