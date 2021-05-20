@@ -35,6 +35,11 @@ const DISCORD_BOT_PERM = 2147483648;
  */
 const BOOT_CMD_NAME = "boot";
 
+/**
+ * The shutdown server Discord slash command name.
+ */
+const SHUTDOWN_CMD_NAME = "shutdown";
+
 const VM_POWER_STATE_DEALLOCATED = "PowerState/deallocated";
 const VM_POWER_STATE_DEALLOCATING = "PowerState/deallocating";
 const VM_POWER_STATE_RUNNING = "PowerState/running";
@@ -411,7 +416,7 @@ class PowerRequest {
 				await this.bot.azureCompute.virtualMachines.beginStart(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
 			case VMPowerState.Stopped:
-				await this.bot.azureCompute.virtualMachines.powerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+				await this.bot.azureCompute.virtualMachines.beginPowerOff(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
 				break;
 		}
 
@@ -504,6 +509,13 @@ class Bot {
 				cmds = guild.commands;
 				this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
 			}
+
+			const VM_CHOICES = this.cfg.vms.map((vm) => {
+				return {
+					name: vm.friendlyName,
+					value: vm.friendlyName,
+				};
+			})
 			
 			cmds.create({
 				name: BOOT_CMD_NAME,
@@ -514,12 +526,21 @@ class Bot {
 						description: "The server to start",
 						type: 3, // string
 						required: true,
-						choices: this.cfg.vms.map((vm) => {
-							return {
-								name: vm.friendlyName,
-								value: vm.friendlyName,
-							};
-						}),
+						choices: VM_CHOICES,
+					},
+				],
+			});
+
+			cmds.create({
+				name: SHUTDOWN_CMD_NAME,
+				description: "Request a server be shutdown",
+				options: [
+					{
+						name: "server",
+						description: "The server to shutdown",
+						type: 3, // string
+						required: true,
+						choices: VM_CHOICES,
 					},
 				],
 			});
@@ -572,7 +593,7 @@ class Bot {
 			return;
 		}
 
-		if (interaction.commandName === BOOT_CMD_NAME) {
+		if (interaction.commandName === BOOT_CMD_NAME || interaction.commandName === SHUTDOWN_CMD_NAME) {
 			// Find parameters about vm from config
 			const optName = interaction.options[0].value;
 
@@ -586,8 +607,14 @@ class Bot {
 			// Defer response until PowerRequest.poll() can update it
 			await interaction.defer();
 
-			// Setup Boot instance
-			const powerReq = new PowerRequest(this, { id: interaction.id, token: interaction.token }, vmCfg, VMPowerState.Running);
+			// Determine the target power state
+			let targetPower = VMPowerState.Running;
+			if (interaction.commandName === SHUTDOWN_CMD_NAME) {
+				targetPower = VMPowerState.Deallocated;
+			}
+
+			// Setup power request
+			const powerReq = new PowerRequest(this, { id: interaction.id, token: interaction.token }, vmCfg, targetPower);
 			await powerReq.poll();
 			await powerReq.save();
 
