@@ -11,6 +11,7 @@ import {
 	CommandInteraction,
 	Intents as DiscordIntents,
 	InteractionResponseType,
+	MessageEmbedOptions,
 } from "discord.js";
 import winston from "winston";
 import fetch, {
@@ -52,6 +53,21 @@ const VM_POWER_STATE_RUNNING = "PowerState/running";
 const VM_POWER_STATE_STARTING = "PowerState/starting";
 const VM_POWER_STATE_STOPPED = "PowerState/stopped";
 const VM_POWER_STATE_STOPPING = "PowerState/stopping";
+
+/**
+ * Color which represents an action in progress. Decimal version of hex code #e6e630.
+ */
+const DEC_COLOR_IN_PROGRESS = 15132208;
+
+/**
+ * Color which shows something is being turned on. Decimal version of hex code #39e630.
+ */
+const DEC_COLOR_START = 3794480;
+
+/**
+ * Color which shows something is being turned off. Decimal version of hex code #e01f1f.
+ */
+const DEC_COLOR_STOP = 14688031;
 
 /**
  * The power state of an Azure virtual machine.
@@ -246,15 +262,21 @@ class DiscordInteraction {
 	/**
 	 * Create the initial interaction response.
 	 * @param content The response message text content.
+	 * @param [embeds] Array of embeds for response message.
 	 * @returns Resolves when the Discord API request completes
 	 */
-	async newInitResp(content: string): Promise<void> {
+	async newInitResp(content: string, embeds?: MessageEmbedOptions[]): Promise<void> {
+		if (embeds === undefined) {
+			embeds = [];
+		}
+		
 		const resp = await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
 			method: "POST",
 			body: JSON.stringify({
 				type: 4, // ChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
 				data: {
 					content: content,
+					embeds: embeds,
 				},
 			}),
 		});
@@ -276,13 +298,19 @@ class DiscordInteraction {
 	/**
 	 * Edit the initial interaction response.
 	 * @param content New message content.
+	 * @param [embeds] Array of new embeds.
 	 * @returns Resolves when edit Discord API call completes.
 	 */
-	async editInitResp(content: string): Promise<void> {
+	async editInitResp(content: string, embeds?: MessageEmbedOptions[]): Promise<void> {
+		if (embeds === undefined) {
+			embeds = [];
+		}
+		
 		const resp = await this.fetch(`/webhooks/${this.bot.cfg.discord.applicationID}/${this.interaction_id.token}/messages/@original`, {
 			method: "PATCH",
 			body: JSON.stringify({
 				content: content,
+				embeds: embeds,
 			}),
 		});
 	}
@@ -461,15 +489,51 @@ class PowerRequest {
 		try {
 			const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
 
+			// Setup a Discord embed to show the user
+			let targetTitleWord = undefined;
+			let targetColor = undefined;
+			switch (this.data.target_power) {
+				case VMPowerState.Deallocated:
+					targetTitleWord = ":stop_sign: Shutdown";
+					targetColor = DEC_COLOR_STOP;
+					break;
+				case VMPowerState.Running:
+					targetTitleWord = ":racehorse: Start";
+					targetColor = DEC_COLOR_START;
+					break;
+				case VMPowerState.Stopped:
+					targetTitleWord = ":pause_button: Suspend";
+					targetColor = DEC_COLOR_STOP;
+					break;
+			}
+			
+			let embed: MessageEmbedOptions = {
+				title: `${targetTitleWord} ${this.data.vm_cfg.friendlyName} Server`,
+				color: targetColor,
+				fields: [],
+			};
+
+			const sendEmbed = async () => {
+				await interactionClient.editInitResp(undefined, [ embed ]);
+			};
+
 			// Get the current state of the VM
 			const powerState = await this.powerState();
 			
 			if (powerState !== undefined) {
 				const vmStatePower = vmStateFromPower(powerState);
+				// Show user the current state
+				embed.fields.push({
+					name: "Server Status",
+					value: vmStatePower.friendlyName,
+					inline: true,
+				});
 
 				// Don't issue any orders to the virtual machine if it is in the middle of doing something
 				if (vmStatePower.terminal === false) {
-					await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName}`);
+					embed.description = `Please wait a moment, the ${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName} right now.`;
+					embed.color = DEC_COLOR_IN_PROGRESS;
+					await sendEmbed();
 					return;
 				}
 
@@ -480,9 +544,18 @@ class PowerRequest {
 						time: moment().valueOf(),
 					};
 
-					await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
+					embed.description = `All done! The ${this.data.vm_cfg.friendlyName} server is ${vmStatePower.friendlyName} now.`;
+					await sendEmbed();
 					return;
 				}
+			} else {
+				// We don't know the virtual machine's power state, this could happen maybe when a vm is first created?
+				embed.fields.push({
+					name: "Server Status",
+					value: "Unknown",
+					inline: true,
+				});
+				this.bot.log.warn("the virtual machine's status was unknown, unsure why this happens", { data: this.data, powerState });
 			}
 
 			// Otherwise perform action to reach requested state
@@ -505,7 +578,9 @@ class PowerRequest {
 
 			const actionWord = vmStateFromPower(nonTerminalForPower(this.data.target_power)).friendlyName;
 
-			await interactionClient.editInitResp(`${actionWord} the ${this.data.vm_cfg.friendlyName} server`);
+			embed.description = `Please wait a moment, the ${this.data.vm_cfg.friendlyName} server just ${actionWord}.`;
+			embed.color = DEC_COLOR_IN_PROGRESS;
+			await sendEmbed();
 			return;
 		} catch (e) {
 			this.bot.log.error("failed to poll PowerRequest", { error: e, data: this.data });
