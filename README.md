@@ -89,26 +89,3 @@ yarn start
 
 # Design
 User's interact with the bot using slash commands. These are only under the bot's control for 15 minutes ([Discord Slash Command Response Docs](https://discord.com/developers/docs/interactions/slash-commands#responding-to-an-interaction)). As such, all commands must complete within 15 minutes, meaning all server's should start in under 15 minutes.
-
-## Data Model
-Stored in MongoDB.
-
-### Boot
-Stores the record of one boot request.
-
-- `interaction_id` (string): ID of Discord slash command interaction which started the boot request.
-- `azure_vm_uri` (string): Full identifier URI of Azure virtual machine
-- `stage` (object): Stores information about each step through the process of booting a server. Each stage's data is stored in a sub-object under the stage's name as a key. A stage sub-object will not exist until the boot process reaches that stage. The stages and their sub-objects are:
-	- `vm_starting`: A privileged user approved the request and the virtual machine is in the process of booting
-	  - `unix_time` (integer): The time at which the vm start process began
-		- `end_unix_time` (integer): The time at which the virtual machine is set to be shut down
-	- `running`: The game server is running and join-able by users
-	  - `unix_time` (integer): The time at which the vm first started running
-	- `vm_stopping`: The virtual machine is in the process of shutting down
-	  - `unix_time` (integer): The time at which the vm starting stopping
-	- `stopped`: The virtual machine has been stopped
-	  - `unix_time` (integer): The time at which the vm stopped
-	- `error`: An error occurred during one of the stages
-	  - `stage` (string): Name of stage where the error occurred
-		- `internal_error` (string): Internal details of error which occurred
-		- `user_error` (string): User friendly description of error which occurred
