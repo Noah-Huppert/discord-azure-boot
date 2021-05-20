@@ -381,10 +381,7 @@ class PowerRequest {
 	 * @returns Resolves when done processing. 
 	 */
 	async poll(): Promise<void> {
-		// Initially defer the interaction respone
 		const interactionClient = new DiscordInteraction(this.bot, this.data.interaction_id);
-
-		await interactionClient.newDeferResp();
 
 		// Get the current state of the VM
 		const powerState = await this.powerState();
@@ -585,6 +582,9 @@ class Bot {
 			}
 
 			const vmCfg = vmSearch[0];
+
+			// Defer response until PowerRequest.poll() can update it
+			await interaction.defer();
 
 			// Setup Boot instance
 			const powerReq = new PowerRequest(this, { id: interaction.id, token: interaction.token }, vmCfg, VMPowerState.Running);
