@@ -10,6 +10,8 @@ Discord bot which starts and stops game servers running on Azure Virtual Machine
 # Overview
 Allows trusted Discord users to start and stop Azure virtual machines. Useful if you are running a game server on Azure and want to allow friends to turn on the server. This bot also automatically shuts down servers after all users leave the voice chat (only if a user initially requested it turned on).
 
+![Screenshot of completed boot and shutdown commands](./screenshot.png)
+
 # Setup
 ## Configuration File
 Make a copy of `config.ex.ts` named `config.ts`. Edit this `config.ts` file with your own values, make sure not to commit it to git.
