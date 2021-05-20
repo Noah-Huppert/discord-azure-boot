@@ -746,7 +746,7 @@ class Bot {
 			discordReadyProm.resolve = resolve;
 			discordReadyProm.reject = reject;
 		});
-		this.discord.once("ready", () => {
+		this.discord.once("ready", async  () => {
 			let cmds = this.discord.application.commands;
 			if (this.cfg.discord.guildID !== null) {
 				const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
@@ -764,9 +764,9 @@ class Bot {
 					name: vm.friendlyName,
 					value: vm.friendlyName,
 				};
-			})
+			});
 			
-			cmds.create({
+			const bootCmd = await cmds.create({
 				name: BOOT_CMD_NAME,
 				description: "Request a server be started so you can play on it",
 				options: [
@@ -778,9 +778,15 @@ class Bot {
 						choices: VM_CHOICES,
 					},
 				],
+				defaultPermission: false,
 			});
+			await cmds.setPermissions(bootCmd, [{
+				type: "ROLE",
+				id: this.cfg.discord.permissionRoleID,
+				permission: true,
+			}]);
 
-			cmds.create({
+			const shutdownCmd = await cmds.create({
 				name: SHUTDOWN_CMD_NAME,
 				description: "Request a server be shutdown",
 				options: [
@@ -792,7 +798,13 @@ class Bot {
 						choices: VM_CHOICES,
 					},
 				],
-			});
+				defaultPermission: false,
+ 			});
+			await cmds.setPermissions(shutdownCmd, [{
+				type: "ROLE",
+				id: this.cfg.discord.permissionRoleID,
+				permission: true,
+			}]);
 
 			this.log.info("registered discord slash commands");
 			discordReadyProm.resolve();

@@ -55,9 +55,9 @@ const cfg: BotConfig = {
 		applicationID: "",
 		
 		/**
-		 * Discord API application bot user ID.
+		 * ID of the Discord role which users must have in order to utilize the bot.
 		 */
-		botUserID: "",
+		permissionRoleID: "",
 
 		/**
 		 * Discord API application bot authentication token.

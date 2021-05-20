@@ -57,9 +57,9 @@ export default interface BotConfig {
 		applicationID: string;
 		
 		/**
-		 * Discord API application bot user ID.
+		 * ID of the Discord role which users must have in order to utilize the bot. Currently set to the berry boy role.
 		 */
-		botUserID: string;
+		permissionRoleID: string,
 
 		/**
 		 * Discord API application bot authentication token.
