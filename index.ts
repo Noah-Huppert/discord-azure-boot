@@ -35,6 +35,13 @@ const DISCORD_BOT_PERM = 2147483648;
  */
 const BOOT_CMD_NAME = "boot";
 
+const VM_POWER_STATE_DEALLOCATED = "PowerState/deallocated";
+const VM_POWER_STATE_DEALLOCATING = "PowerState/deallocating";
+const VM_POWER_STATE_RUNNING = "PowerState/running";
+const VM_POWER_STATE_STARTING = "PowerState/starting";
+const VM_POWER_STATE_STOPPED = "PowerState/stopped";
+const VM_POWER_STATE_STOPPING = "PowerState/stopping";
+
 /**
  * The power state of an Azure virtual machine.
  */
@@ -45,6 +52,36 @@ enum VMPowerState {
 	Starting = "PowerState/starting",
 	Stopped = "PowerState/stopped",
 	Stopping = "PowerState/stopping",
+}
+
+/**
+ * Determine which VMPowerState a string represents.
+ * @param code The power state code.
+ * @returns Corresponding VMPowerState or undefined if there is no valid mapping.
+ */
+function vmPowerStateFromStr(code: string): VMPowerState|undefined {
+	switch (code) {
+		case VM_POWER_STATE_DEALLOCATED:
+			return VMPowerState.Deallocated;
+			break;
+		case VM_POWER_STATE_DEALLOCATING:
+			return VMPowerState.Deallocating;
+			break;
+		case VM_POWER_STATE_RUNNING:
+			return VMPowerState.Running;
+			break;
+		case VM_POWER_STATE_STARTING:
+			return VMPowerState.Starting;
+			break;
+		case VM_POWER_STATE_STOPPED:
+			return VMPowerState.Stopped;
+			break;
+		case VM_POWER_STATE_STOPPING:
+			return VMPowerState.Stopping;
+			break;
+	}
+
+	return undefined;
 }
 
 /**
@@ -131,13 +168,6 @@ interface VMState {
 	 */
 	terminal: boolean,
 }
-
-const VM_POWER_STATE_DEALLOCATED = "PowerState/deallocated";
-const VM_POWER_STATE_DEALLOCATING = "PowerState/deallocating";
-const VM_POWER_STATE_RUNNING = "PowerState/running";
-const VM_POWER_STATE_STARTING = "PowerState/starting";
-const VM_POWER_STATE_STOPPED = "PowerState/stopped";
-const VM_POWER_STATE_STOPPING = "PowerState/stopping";
 
 /**
  * Data serialized about a power request in the database.
@@ -316,14 +346,16 @@ class PowerRequest {
 	async powerState(): Promise<VMPowerState|undefined> {
 		// Get status of virtual machine
 		const vmInstance = await this.bot.azureCompute.virtualMachines.instanceView(this.data.vm_cfg.resourceGroup, this.data.vm_cfg.azureName);
+
 		// possible values: https://docs.microsoft.com/en-us/dotnet/api/microsoft.azure.management.compute.fluent.powerstate?view=azure-dotnet#fields
 		const powerStates = vmInstance.statuses.filter((v) => v.code.indexOf("PowerState/") !== -1);
+
 		if (powerStates.length === 0) {
 			return undefined;
 		}
 
 		const code = powerStates[powerStates.length-1].code;
-		return VMPowerState[code];
+		return vmPowerStateFromStr(code);
 	}
 
 	/**
@@ -367,7 +399,6 @@ class PowerRequest {
 			}
 
 			// Check if in the final state we requested
-			this.bot.log.debug("is the current vm state equal to the target?", { current: powerState, target: this.data.target_power });
 			if (powerState === this.data.target_power) {
 				await interactionClient.editInitResp(`${this.data.vm_cfg.friendlyName} server successfully ${vmStatePower.friendlyName}`);
 				return;
