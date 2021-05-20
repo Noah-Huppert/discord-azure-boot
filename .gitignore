@@ -6,8 +6,11 @@
 # Node dependencies
 node_modules/
 
-# MongoDB container
-container-data/
-
 # Log files
 *.log
+
+# Typescript build output
+build/
+
+# MongoDB container
+container-data/

@@ -7,7 +7,8 @@
  "author": "Noah Huppert <contact@noahh.io>",
  "license": "MIT",
  "scripts": {
-  "start": "ts-node index.ts"
+   "start": "ts-node index.ts",
+	 "build": "tsc"
  },
  "dependencies": {
   "@azure/arm-compute": "^16.1.0",
