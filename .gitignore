@@ -1,6 +1,6 @@
 # Bot configuration
 *config*
-!lib-bot-config.js
+!lib-bot-config.ts
 !config.ex.ts
 !tsconfig.json
 
