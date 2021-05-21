@@ -348,7 +348,7 @@ class DiscordCtrlMsg {
 	 */
 	async edit(content: string, embed?: MessageEmbedOptions): Promise<void> {
 		switch (this.id.ctrl_type) {
-			case DISCORD_CTRL_PLAIN_MSG:
+			case DISCORD_CTRL_TXT_MSG:
 				// If a regular Discord message, get it
 				const guild = await this.bot.discord.guilds.cache.get(this.id.location.guildID);
 				if (guild === undefined) {
@@ -381,7 +381,7 @@ class DiscordCtrlMsg {
 /**
  * Indentifies a Discord message to use as a control message. Can either be a vanilla message or an interaction.
  */
-type DiscordCtrlMsgID = DiscordCtrlPlainMsgID | DiscordCtrlInteractionID;
+type DiscordCtrlMsgID = DiscordCtrlTxtMsgID | DiscordCtrlInteractionID;
 
 /**
  * Identifies a location in Discord where text messages can be sent.
@@ -401,8 +401,8 @@ interface DiscordChannelLocation {
 /**
  * Identifies a regular Discord message as the control message.
  */
-type DiscordCtrlPlainMsgID = {
-	ctrl_type: "PLAIN_MSG";
+type DiscordCtrlTxtMsgID = {
+	ctrl_type: "TXT_MSG";
 
 	/**
 	 * Specifies a Discord guild and channel in which the message exists.
@@ -416,9 +416,9 @@ type DiscordCtrlPlainMsgID = {
 };
 
 /**
- * Identifies a DiscordCtrlMsgID as a DiscordCtrlPlainMsgID.
+ * Identifies a DiscordCtrlMsgID as a DiscordCtrlTxtMsgID.
  */
-const DISCORD_CTRL_PLAIN_MSG = "PLAIN_MSG";
+const DISCORD_CTRL_TXT_MSG = "TXT_MSG";
 
 /**
  * Identifies a Discord interaction to use as the control message.
