@@ -1105,7 +1105,7 @@ class Bot {
   			),
 			new DiscordSlashCommandBuilder()
 				.setName(SHUTDOWN_CMD_NAME)
-				.setDescription("Turn off a gamer serveR")
+				.setDescription("Turn off a gamer server")
 				.addStringOption((opt) => 
 					opt
 						.setName("server")
