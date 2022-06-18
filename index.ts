@@ -490,7 +490,7 @@ class PowerRequest {
 	 * @returns Resolves with number of ongoing requests.
 	 */
 	static async OngoingCount(bot: Bot, vmCfg: VMConfig): Promise<number> {
-		return await bot.db.power_requests.find({ "vm_cfg.friendlyName": vmCfg.friendlyName, "stage.current": "in_progress" }).count();
+		return await bot.db.power_requests.countDocuments({ "vm_cfg.friendlyName": vmCfg.friendlyName, "stage.current": "in_progress" });
 	}
 
 	/**
