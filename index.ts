@@ -2,9 +2,11 @@ import * as msRestNodeAuth from "@azure/ms-rest-nodeauth";
 import { ComputeManagementClient } from "@azure/arm-compute";
 import {
 	MongoClient,
-	Database,
 	Collection,
 	ObjectId,
+	Db as MongoDB,
+	WithId,
+	Document,
 } from "mongodb";
 import {
 	Client as DiscordClient,
@@ -521,7 +523,7 @@ class PowerRequest {
 	 */
 	pk(): object {
 		return {
-			"ctrl_msg_id": this.data.ctrl_msg_id,
+			ctrl_msg_id: this.data.ctrl_msg_id,
 		};
 	}
 
@@ -605,7 +607,14 @@ class PowerRequest {
 				// Estimate duration from past invocations
 				let estStr = "";
 				
-				const otherReqs = await this.bot.db.power_requests.find({ vm_cfg: this.data.vm_cfg, "stage.current": "success", "stage.in_progress.start_power": this.data.stage.in_progress.start_power }, { "stage.in_progress.time": true, "stage.success.time": true }).limit(10).toArray();
+				const otherReqs = await this.bot.db.power_requests.find({
+					vm_cfg: this.data.vm_cfg,
+					"stage.current": "success",
+					"stage.in_progress.start_power": this.data.stage.in_progress.start_power,
+				}, {
+					"stage.in_progress.time": true,
+					"stage.success.time": true,
+				}).limit(10).toArray();
 				
 				if (otherReqs.length > 0) {
 					const totalDiffs = otherReqs.map((doc) => {
@@ -996,7 +1005,7 @@ class Bot {
 	log: winston.Logger;
 	azureCompute: ComputeManagementClient;
 	mongoClient: MongoClient;
-	mongoDB: Database;
+	mongoDB: MongoDB;
 	db: BotDB;
 	discord: DiscordClient;
 	pollOngoingInterval: NodeJS.Timeout;
@@ -1034,7 +1043,7 @@ class Bot {
 
 	  // Connect to MongoDB
 		this.log.info("trying to connect to mongodb");
-	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI, { useUnifiedTopology: true });
+	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI);
 	  await this.mongoClient.connect();
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
 		this.db = {
@@ -1266,12 +1275,12 @@ interface BotDB {
 	/**
 	 * Power Requests collection.
 	 */
-	power_requests: Collection;
+	power_requests: Collection<PowerRequestData>;
 
 	/**
 	 * Boot Requests collection.
 	 */
-	boot_requests: Collection;
+	boot_requests: Collection<BootRequestData>;
 }
 
 async function main(log) {
