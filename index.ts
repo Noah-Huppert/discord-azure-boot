@@ -1039,8 +1039,8 @@ class Bot {
 		this.log.info("connected to mongodb");
 
 		// Connect to Discord
-		this.log.info(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
-		this.log.info(`authorize the discord api application via oauth2: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=applications.commands`);
+		const discordOAuthURL = encodeURI(`https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot applications.commands`);
+		this.log.info(`invite and authorize the discord api application via oauth2: ${discordOAuthURL}`);
 		this.log.info("trying to connect to discord");
 
 		this.discord = new DiscordClient({
