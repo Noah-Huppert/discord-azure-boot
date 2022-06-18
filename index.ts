@@ -1167,9 +1167,8 @@ class Bot {
 		}
 
 		// Check is in the guild we are running for
-		if (this.cfg.discord.guildID !== null && interaction.guildID !== this.cfg.discord.guildID) {
-			await interaction.reply({
-			});
+		if (this.cfg.discord.guildID !== null && interaction.guildId !== this.cfg.discord.guildID) {
+			this.log.warn(`Received interaction for a guild we are not handling: ${interaction.guildId}`);
 			return;
 		}
 
@@ -1182,11 +1181,11 @@ class Bot {
 
 		if (interaction.commandName === BOOT_CMD_NAME) {
 			// Find parameters about vm from config
-			const optName = interaction.options[0].value;
+			const optName = interaction.options.getString("server");
 			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
 
 			// Defer response until PowerRequest.poll() can update it
-			await interaction.defer();
+			await interaction.deferReply();
 
 			// Determine if a power request is already running for this vm
 			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
@@ -1213,11 +1212,11 @@ class Bot {
 			return;
 		} else if (interaction.commandName === SHUTDOWN_CMD_NAME) {
 			// Find parameters about vm from config
-			const optName = interaction.options[0].value;
+			const optName = interaction.options.getString("server");
 			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
 
 			// Defer response until PowerRequest.poll() can update it
-			await interaction.defer();
+			await interaction.deferReply();
 
 			// Determine if a power request is already running for this vm
 			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
