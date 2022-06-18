@@ -367,7 +367,10 @@ class DiscordCtrlMsg {
 					const msg = await (channel as TextChannel).messages.cache.get(this.id.msgID);
 
 					// Then edit
-					await msg.edit(content, { embed });
+					await msg.edit({
+						content,
+						embeds: [ embed ],
+					});
 				} else {
 					throw new Error(`could not edit message as its channel with ID ${this.id.location.channelID} was not a text channel`);
 				}
@@ -1118,7 +1121,7 @@ class Bot {
 			this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
 
 			await discordREST.put(
-				DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID)
+				DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID),
 				{ body: discordCommands }
 			);
 		} else {
@@ -1145,26 +1148,6 @@ class Bot {
 	  // Disconnect from MongoDB
 	  this.mongoClient.close();
   }
-
-	/**
-	 * Fetch the Discord slash commands API client. Fetches a guild specific client if the config discord.guildID field is set.
-	 * @returns {Discord CommandsClient} The Discord commands client.
-	 * @throws {Error} If guildID specified was not found.
-	 */
-	discordCommands() {
-		let cmds = this.discord.application.commands;
-		if (this.cfg.discord.guildID !== null) {
-			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
-
-			if (guild === undefined) {
-				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
-			}
-
-			cmds = guild.commands;
-		}
-
-		return cmds;
-	}
 
 	/**
 	 * Runs whenever a Discord slash command is invoked.
