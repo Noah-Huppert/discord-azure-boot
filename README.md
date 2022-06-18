@@ -95,6 +95,9 @@ Run the bot:
 yarn start
 ```
 
+## Dependency Notes
+The `node-fetch` package is pinned at version 2.6.1 due to [import errors](https://stackoverflow.com/a/69093538). The solution of putting `"type": "module"` in my `package.json` leads to a Typescript error who's solution is to remove `"type": "module"`. I don't actually need any features from the latest version of `node-fetch` so I just pinned it to the latest working version.
+
 # Deployment
 A Docker container and Docker Compose file  named `docker-copose.bot.yml` are provided which run the bot process.
 

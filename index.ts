@@ -1,4 +1,4 @@
-import * as msRestNodeAuth from "@azure/ms-rest-nodeauth";
+import { ClientSecretCredential } from "@azure/identity";
 import { ComputeManagementClient } from "@azure/arm-compute";
 import {
 	MongoClient,
@@ -20,7 +20,8 @@ import { REST as DiscordREST } from "@discordjs/rest";
 import { Routes as DiscordRESTRoutes } from "discord-api-types/v9";
 import { SlashCommandBuilder as DiscordSlashCommandBuilder } from "@discordjs/builders";
 import winston from "winston";
-import fetch, {
+import fetch from "node-fetch";
+import type {
 	Response as FetchResponse,
 } from "node-fetch";
 import moment from "moment";
@@ -611,9 +612,6 @@ class PowerRequest {
 					vm_cfg: this.data.vm_cfg,
 					"stage.current": "success",
 					"stage.in_progress.start_power": this.data.stage.in_progress.start_power,
-				}, {
-					"stage.in_progress.time": true,
-					"stage.success.time": true,
 				}).limit(10).toArray();
 				
 				if (otherReqs.length > 0) {
@@ -1027,7 +1025,7 @@ class Bot {
 	  // Authenticate with the Azure API
 		this.log.info("trying to authenticate with azure");
 		
-	  const azureCreds = (await msRestNodeAuth.loginWithServicePrincipalSecretWithAuthResponse(this.cfg.azure.applicationID, this.cfg.azure.accessToken, this.cfg.azure.directoryID)).credentials;
+		const azureCreds = new ClientSecretCredential(this.cfg.azure.directoryID, this.cfg.azure.applicationID, this.cfg.azure.accessToken);
 
 	  this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
 		this.log.info("authenticated with azure");
@@ -1077,7 +1075,7 @@ class Bot {
 			discordReadyProm.resolve();
 		});
 
-		this.discord.on("interaction", this.onDiscordCmd.bind(this));
+		this.discord.on("interactionCreate", this.onDiscordCmd.bind(this));
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
 		this.log.info("connected to discord");
