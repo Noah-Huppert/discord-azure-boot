@@ -14,6 +14,9 @@ import {
 	MessageEmbedOptions,
 	TextChannel,
 } from "discord.js";
+import { REST as DiscordREST } from "@discordjs/rest";
+import { Routes as DiscordRESTRoutes } from "discord-api-types/v9";
+import { SlashCommandBuilder as DiscordSlashCommandBuilder } from "@discordjs/builders";
 import winston from "winston";
 import fetch, {
 	Response as FetchResponse,
@@ -1059,76 +1062,6 @@ class Bot {
 			discordReadyProm.reject = reject;
 		});
 		this.discord.once("ready", async  () => {
-			let cmds = this.discord.application.commands;
-			if (this.cfg.discord.guildID !== null) {
-				const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
-
-				if (guild === undefined) {
-					throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
-				}
-
-				cmds = guild.commands;
-				this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
-			}
-
-			if (this.cfg.discord.permissionRoleID !== null) {
-				this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
-			}
-
-			const VM_CHOICES = this.cfg.vms.map((vm) => {
-				return {
-					name: vm.friendlyName,
-					value: vm.friendlyName,
-				};
-			});
-
-			const useDefaultPerms = this.cfg.discord.permissionRoleID === null;
-			
-			const bootCmd = await cmds.create({
-				name: BOOT_CMD_NAME,
-				description: "Start a game server",
-				options: [
-					{
-						name: "server",
-						description: "The server to start",
-						type: 3, // string
-						required: true,
-						choices: VM_CHOICES,
-					},
-				],
-				defaultPermission: useDefaultPerms,
-			});
-			if (this.cfg.discord.permissionRoleID !== null) {
-				await cmds.setPermissions(bootCmd, [{
-					type: "ROLE",
-					id: this.cfg.discord.permissionRoleID,
-					permission: true,
-				}]);
-			}
-
-			const shutdownCmd = await cmds.create({
-				name: SHUTDOWN_CMD_NAME,
-				description: "Turn off a game server",
-				options: [
-					{
-						name: "server",
-						description: "The server to shutdown",
-						type: 3, // string
-						required: true,
-						choices: VM_CHOICES,
-					},
-				],
-				defaultPermission: useDefaultPerms,
- 			});
-			if (this.cfg.discord.permissionRoleID !== null) {
-				await cmds.setPermissions(shutdownCmd, [{
-					type: "ROLE",
-					id: this.cfg.discord.permissionRoleID,
-					permission: true,
-				}]);
-			}
-
-			this.log.info("registered discord slash commands");
 			discordReadyProm.resolve();
 		});
 
@@ -1136,6 +1069,66 @@ class Bot {
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
 		this.log.info("connected to discord");
+
+		// Setup Discord slash commands
+		if (this.cfg.discord.permissionRoleID !== null) {
+			this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
+		}
+		
+		const VM_CHOICES = this.cfg.vms.map((vm) => {
+			return {
+				name: vm.friendlyName,
+				value: vm.friendlyName,
+			};
+		});
+
+		const discordCommands = [
+			new DiscordSlashCommandBuilder()
+				.setName(BOOT_CMD_NAME)
+				.setDescription("Start a game server")
+				.addStringOption((opt) => 
+					opt
+						.setName("server")
+						.setDescription("The server to start")
+						.setRequired(true)
+						.addChoices(...VM_CHOICES)
+  			),
+			new DiscordSlashCommandBuilder()
+				.setName(SHUTDOWN_CMD_NAME)
+				.setDescription("Turn off a gamer serveR")
+				.addStringOption((opt) => 
+					opt
+						.setName("server")
+						.setDescription("The server to shutdown")
+						.setRequired(true)
+						.addChoices(...VM_CHOICES)
+				),
+		].map((cmd) => cmd.toJSON());
+		
+		const discordREST = new DiscordREST({ version: "9" }).setToken(this.cfg.discord.botToken);
+		if (this.cfg.discord.guildID) {
+			// Using guild specific commands
+			// Sanity check that the specified guild exists
+			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
+			
+			if (guild === undefined) {
+				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
+			}
+			
+			this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
+
+			await discordREST.put(
+				DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID)
+				{ body: discordCommands }
+			);
+		} else {
+			// Using global slash commands
+			await discordREST.put(
+				DiscordRESTRoutes.applicationCommands(this.cfg.discord.applicationID),
+				{ body: discordCommands }
+			);
+		}
+		this.log.info("registered discord slash commands");
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
@@ -1180,6 +1173,20 @@ class Bot {
 	async onDiscordCmd(interaction) {
 		// Only handle slash commands
 		if (interaction.isCommand() !== true) {
+			return;
+		}
+
+		// Check is in the guild we are running for
+		if (this.cfg.discord.guildID !== null && interaction.guildID !== this.cfg.discord.guildID) {
+			await interaction.reply({
+			});
+			return;
+		}
+
+		// Check user has required permissions
+		if (this.cfg.discord.permissionRoleID !== null && interaction.member.roles.cache.has(this.cfg.discord.permissionRoleID) === false) {
+			// If configured check if user has permissions to invoke the command
+			await interaction.reply("Sorry, you do not have permission to use this command.");
 			return;
 		}
 
