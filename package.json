@@ -1,29 +1,32 @@
 {
- "name": "discord-azure-boot",
- "version": "0.0.0",
- "description": "Discord bot which starts and stops game servers running on Azure Virtual Machines.",
- "main": "index.ts",
- "repository": "git@github.com:Noah-Huppert/discord-azure-boot.git",
- "author": "Noah Huppert <contact@noahh.io>",
- "license": "MIT",
- "scripts": {
-   "start": "ts-node index.ts",
-	 "build": "tsc"
- },
- "dependencies": {
-  "@azure/arm-compute": "^16.1.0",
-  "@azure/ms-rest-nodeauth": "^3.0.9",
-  "discord.js": "discordjs/discord.js",
-  "moment": "^2.29.1",
-  "mongodb": "^3.6.6",
-  "node-fetch": "^2.6.1",
-  "winston": "^3.3.3"
- },
- "devDependencies": {
-  "@types/node": "^15.3.0",
-  "@types/node-fetch": "^2.5.10",
-  "discord-api-types": "^0.18.1",
-  "ts-node": "^9.1.1",
-  "typescript": "^4.2.4"
- }
+	"name": "discord-azure-boot",
+	"version": "0.0.0",
+	"description": "Discord bot which starts and stops game servers running on Azure Virtual Machines.",
+	"main": "index.ts",
+	"repository": "git@github.com:Noah-Huppert/discord-azure-boot.git",
+	"author": "Noah Huppert <contact@noahh.io>",
+	"license": "MIT",
+	"scripts": {
+		"start": "tsc --project tsconfig.json && node --enable-source-maps --trace-warnings build/index.js",
+		"build": "tsc --project tsconfig.json"
+	},
+	"dependencies": {
+		"@azure/arm-compute": "^19.0.0",
+		"@azure/identity": "^2.0.5",
+		"@azure/ms-rest-nodeauth": "^3.1.1",
+		"@discordjs/builders": "^0.15.0",
+		"@discordjs/rest": "^0.5.0",
+		"discord.js": "^13.8.0",
+		"moment": "^2.29.3",
+		"mongodb": "^4.7.0",
+		"node-fetch": "2.6.1",
+		"winston": "^3.7.2"
+	},
+	"devDependencies": {
+		"@types/node": "^18.0.0",
+		"@types/node-fetch": "^2.6.2",
+		"discord-api-types": "^0.34.0",
+		"ts-node": "^10.8.1",
+		"typescript": "^4.7.4"
+	}
 }

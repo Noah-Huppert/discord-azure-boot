@@ -1,10 +1,12 @@
-import * as msRestNodeAuth from "@azure/ms-rest-nodeauth";
+import { ClientSecretCredential } from "@azure/identity";
 import { ComputeManagementClient } from "@azure/arm-compute";
 import {
 	MongoClient,
-	Database,
 	Collection,
 	ObjectId,
+	Db as MongoDB,
+	WithId,
+	Document,
 } from "mongodb";
 import {
 	Client as DiscordClient,
@@ -14,8 +16,12 @@ import {
 	MessageEmbedOptions,
 	TextChannel,
 } from "discord.js";
+import { REST as DiscordREST } from "@discordjs/rest";
+import { Routes as DiscordRESTRoutes } from "discord-api-types/v9";
+import { SlashCommandBuilder as DiscordSlashCommandBuilder } from "@discordjs/builders";
 import winston from "winston";
-import fetch, {
+import fetch from "node-fetch";
+import type {
 	Response as FetchResponse,
 } from "node-fetch";
 import moment from "moment";
@@ -364,7 +370,10 @@ class DiscordCtrlMsg {
 					const msg = await (channel as TextChannel).messages.cache.get(this.id.msgID);
 
 					// Then edit
-					await msg.edit(content, { embed });
+					await msg.edit({
+						content,
+						embeds: [ embed ],
+					});
 				} else {
 					throw new Error(`could not edit message as its channel with ID ${this.id.location.channelID} was not a text channel`);
 				}
@@ -481,7 +490,7 @@ class PowerRequest {
 	 * @returns Resolves with number of ongoing requests.
 	 */
 	static async OngoingCount(bot: Bot, vmCfg: VMConfig): Promise<number> {
-		return await bot.db.power_requests.find({ "vm_cfg.friendlyName": vmCfg.friendlyName, "stage.current": "in_progress" }).count();
+		return await bot.db.power_requests.countDocuments({ "vm_cfg.friendlyName": vmCfg.friendlyName, "stage.current": "in_progress" });
 	}
 
 	/**
@@ -515,7 +524,7 @@ class PowerRequest {
 	 */
 	pk(): object {
 		return {
-			"ctrl_msg_id": this.data.ctrl_msg_id,
+			ctrl_msg_id: this.data.ctrl_msg_id,
 		};
 	}
 
@@ -599,7 +608,11 @@ class PowerRequest {
 				// Estimate duration from past invocations
 				let estStr = "";
 				
-				const otherReqs = await this.bot.db.power_requests.find({ vm_cfg: this.data.vm_cfg, "stage.current": "success", "stage.in_progress.start_power": this.data.stage.in_progress.start_power }, { "stage.in_progress.time": true, "stage.success.time": true }).limit(10).toArray();
+				const otherReqs = await this.bot.db.power_requests.find({
+					vm_cfg: this.data.vm_cfg,
+					"stage.current": "success",
+					"stage.in_progress.start_power": this.data.stage.in_progress.start_power,
+				}).limit(10).toArray();
 				
 				if (otherReqs.length > 0) {
 					const totalDiffs = otherReqs.map((doc) => {
@@ -990,7 +1003,7 @@ class Bot {
 	log: winston.Logger;
 	azureCompute: ComputeManagementClient;
 	mongoClient: MongoClient;
-	mongoDB: Database;
+	mongoDB: MongoDB;
 	db: BotDB;
 	discord: DiscordClient;
 	pollOngoingInterval: NodeJS.Timeout;
@@ -1012,7 +1025,7 @@ class Bot {
 	  // Authenticate with the Azure API
 		this.log.info("trying to authenticate with azure");
 		
-	  const azureCreds = (await msRestNodeAuth.loginWithServicePrincipalSecretWithAuthResponse(this.cfg.azure.applicationID, this.cfg.azure.accessToken, this.cfg.azure.directoryID)).credentials;
+		const azureCreds = new ClientSecretCredential(this.cfg.azure.directoryID, this.cfg.azure.applicationID, this.cfg.azure.accessToken);
 
 	  this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
 		this.log.info("authenticated with azure");
@@ -1028,7 +1041,7 @@ class Bot {
 
 	  // Connect to MongoDB
 		this.log.info("trying to connect to mongodb");
-	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI, { useUnifiedTopology: true });
+	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI);
 	  await this.mongoClient.connect();
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
 		this.db = {
@@ -1039,8 +1052,8 @@ class Bot {
 		this.log.info("connected to mongodb");
 
 		// Connect to Discord
-		this.log.info(`invite the discord bot: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot&permissions=${DISCORD_BOT_PERM}`);
-		this.log.info(`authorize the discord api application via oauth2: https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=applications.commands`);
+		const discordOAuthURL = encodeURI(`https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot applications.commands`);
+		this.log.info(`invite and authorize the discord api application via oauth2: ${discordOAuthURL}`);
 		this.log.info("trying to connect to discord");
 
 		this.discord = new DiscordClient({
@@ -1059,83 +1072,73 @@ class Bot {
 			discordReadyProm.reject = reject;
 		});
 		this.discord.once("ready", async  () => {
-			let cmds = this.discord.application.commands;
-			if (this.cfg.discord.guildID !== null) {
-				const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
-
-				if (guild === undefined) {
-					throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
-				}
-
-				cmds = guild.commands;
-				this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
-			}
-
-			if (this.cfg.discord.permissionRoleID !== null) {
-				this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
-			}
-
-			const VM_CHOICES = this.cfg.vms.map((vm) => {
-				return {
-					name: vm.friendlyName,
-					value: vm.friendlyName,
-				};
-			});
-
-			const useDefaultPerms = this.cfg.discord.permissionRoleID === null;
-			
-			const bootCmd = await cmds.create({
-				name: BOOT_CMD_NAME,
-				description: "Start a game server",
-				options: [
-					{
-						name: "server",
-						description: "The server to start",
-						type: 3, // string
-						required: true,
-						choices: VM_CHOICES,
-					},
-				],
-				defaultPermission: useDefaultPerms,
-			});
-			if (this.cfg.discord.permissionRoleID !== null) {
-				await cmds.setPermissions(bootCmd, [{
-					type: "ROLE",
-					id: this.cfg.discord.permissionRoleID,
-					permission: true,
-				}]);
-			}
-
-			const shutdownCmd = await cmds.create({
-				name: SHUTDOWN_CMD_NAME,
-				description: "Turn off a game server",
-				options: [
-					{
-						name: "server",
-						description: "The server to shutdown",
-						type: 3, // string
-						required: true,
-						choices: VM_CHOICES,
-					},
-				],
-				defaultPermission: useDefaultPerms,
- 			});
-			if (this.cfg.discord.permissionRoleID !== null) {
-				await cmds.setPermissions(shutdownCmd, [{
-					type: "ROLE",
-					id: this.cfg.discord.permissionRoleID,
-					permission: true,
-				}]);
-			}
-
-			this.log.info("registered discord slash commands");
 			discordReadyProm.resolve();
 		});
 
-		this.discord.on("interaction", this.onDiscordCmd.bind(this));
+		this.discord.on("interactionCreate", this.onDiscordCmd.bind(this));
 		this.discord.login(this.cfg.discord.botToken);
 		await discordReadyProm.promise;
 		this.log.info("connected to discord");
+
+		// Setup Discord slash commands
+		if (this.cfg.discord.permissionRoleID !== null) {
+			this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
+		}
+		
+		const VM_CHOICES = this.cfg.vms.map((vm) => {
+			return {
+				name: vm.friendlyName,
+				value: vm.friendlyName,
+			};
+		});
+
+		const discordCommands = [
+			new DiscordSlashCommandBuilder()
+				.setName(BOOT_CMD_NAME)
+				.setDescription("Start a game server")
+				.addStringOption((opt) => 
+					opt
+						.setName("server")
+						.setDescription("The server to start")
+						.setRequired(true)
+						.addChoices(...VM_CHOICES)
+  			),
+			new DiscordSlashCommandBuilder()
+				.setName(SHUTDOWN_CMD_NAME)
+				.setDescription("Turn off a gamer serveR")
+				.addStringOption((opt) => 
+					opt
+						.setName("server")
+						.setDescription("The server to shutdown")
+						.setRequired(true)
+						.addChoices(...VM_CHOICES)
+				),
+		].map((cmd) => cmd.toJSON());
+		
+		const discordREST = new DiscordREST({ version: "9" }).setToken(this.cfg.discord.botToken);
+		if (this.cfg.discord.guildID) {
+			// Using guild specific commands
+			// Sanity check that the specified guild exists
+			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
+			
+			if (guild === undefined) {
+				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
+			}
+			
+			this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
+
+			await discordREST.put(
+				DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID),
+				{ body: discordCommands }
+			);
+		} else {
+			// Using global slash commands
+			await discordREST.put(
+				DiscordRESTRoutes.applicationCommands(this.cfg.discord.applicationID),
+				{ body: discordCommands }
+			);
+		}
+		this.log.info("registered discord slash commands");
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
@@ -1154,26 +1157,6 @@ class Bot {
   }
 
 	/**
-	 * Fetch the Discord slash commands API client. Fetches a guild specific client if the config discord.guildID field is set.
-	 * @returns {Discord CommandsClient} The Discord commands client.
-	 * @throws {Error} If guildID specified was not found.
-	 */
-	discordCommands() {
-		let cmds = this.discord.application.commands;
-		if (this.cfg.discord.guildID !== null) {
-			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
-
-			if (guild === undefined) {
-				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
-			}
-
-			cmds = guild.commands;
-		}
-
-		return cmds;
-	}
-
-	/**
 	 * Runs whenever a Discord slash command is invoked.
 	 * @param {Discord Interaction} interaction Discord interaction which was just created by a user invoking a bot's slash command.
 	 */
@@ -1183,13 +1166,26 @@ class Bot {
 			return;
 		}
 
+		// Check is in the guild we are running for
+		if (this.cfg.discord.guildID !== null && interaction.guildId !== this.cfg.discord.guildID) {
+			this.log.warn(`Received interaction for a guild we are not handling: ${interaction.guildId}`);
+			return;
+		}
+
+		// Check user has required permissions
+		if (this.cfg.discord.permissionRoleID !== null && interaction.member.roles.cache.has(this.cfg.discord.permissionRoleID) === false) {
+			// If configured check if user has permissions to invoke the command
+			await interaction.reply("Sorry, you do not have permission to use this command.");
+			return;
+		}
+
 		if (interaction.commandName === BOOT_CMD_NAME) {
 			// Find parameters about vm from config
-			const optName = interaction.options[0].value;
+			const optName = interaction.options.getString("server");
 			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
 
 			// Defer response until PowerRequest.poll() can update it
-			await interaction.defer();
+			await interaction.deferReply();
 
 			// Determine if a power request is already running for this vm
 			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
@@ -1216,11 +1212,11 @@ class Bot {
 			return;
 		} else if (interaction.commandName === SHUTDOWN_CMD_NAME) {
 			// Find parameters about vm from config
-			const optName = interaction.options[0].value;
+			const optName = interaction.options.getString("server");
 			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
 
 			// Defer response until PowerRequest.poll() can update it
-			await interaction.defer();
+			await interaction.deferReply();
 
 			// Determine if a power request is already running for this vm
 			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
@@ -1276,12 +1272,12 @@ interface BotDB {
 	/**
 	 * Power Requests collection.
 	 */
-	power_requests: Collection;
+	power_requests: Collection<PowerRequestData>;
 
 	/**
 	 * Boot Requests collection.
 	 */
-	boot_requests: Collection;
+	boot_requests: Collection<BootRequestData>;
 }
 
 async function main(log) {

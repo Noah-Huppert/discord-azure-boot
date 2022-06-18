@@ -51,28 +51,21 @@ Gather information about virtual machines:
 ## Discord
 Create a new Discord API application with a bot user. Save the bot token for later use.
 
-Invite the bot with the following permissions:
+Invite and authorize the bot with the following permissions:
 
 - Use Slash Commands: The bot is invoked using Slash commands
 
 The permission integer is: `2147483648`.
 
+Authorize with the OAuth2 scopes:
+
+- `bot`: Act as a pro grammatically controlled user via the Discord API
+- `applications.commands`: Used to manage slash commands
+
 the bot invite URL is:
 
 ```
-https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot&permissions=2147483648
-```
-
-This will be printed to the console every time the bot starts.
-
-Authorize the application via OAuth2. This is separate from the bot, and provides the overall Discord API application access. Authorize with the OAuth2 scopes:
-
-- `applications.commands`: Used to manage slash commands
-
-This can be done by visiting a URL in the form:
-
-```
-https://discord.com/api/oauth2/authorize?client_id=<...>&scope=applications.commands
+https://discord.com/api/oauth2/authorize?client_id=<...>&scope=bot applications.commands&permissions=2147483648
 ```
 
 This will be printed to the console every time the bot starts.
@@ -101,6 +94,9 @@ Run the bot:
 ```
 yarn start
 ```
+
+## Dependency Notes
+The `node-fetch` package is pinned at version 2.6.1 due to [import errors](https://stackoverflow.com/a/69093538). The solution of putting `"type": "module"` in my `package.json` leads to a Typescript error who's solution is to remove `"type": "module"`. I don't actually need any features from the latest version of `node-fetch` so I just pinned it to the latest working version.
 
 # Deployment
 A Docker container and Docker Compose file  named `docker-copose.bot.yml` are provided which run the bot process.
