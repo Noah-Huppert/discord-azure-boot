@@ -1,6 +1,6 @@
 {
 	"name": "discord-azure-boot",
-	"version": "0.0.0",
+	"version": "0.0.2",
 	"description": "Discord bot which starts and stops game servers running on Azure Virtual Machines.",
 	"main": "index.ts",
 	"repository": "git@github.com:Noah-Huppert/discord-azure-boot.git",
