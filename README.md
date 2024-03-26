@@ -15,7 +15,8 @@ Allows trusted Discord users to start and stop Azure virtual machines. Useful if
 
 # Setup
 ## Configuration File
-Make a copy of `config.ex.ts` named `config.ts`. Edit this `config.ts` file with your own values, make sure not to commit it to git.
+Make a copy of `config.example.json5` named `config.json5`. Edit this file with your own values.  
+When running the program set the `DISCORD_AZURE_BOOT_CONFIG_FILE` env var to the path of this file.
 
 The comments in the example file provide details about each configuration field. Additionally the [Azure Cloud setup](#azure-cloud) and [Discord setup](#discord) sections provide details about how to setup and find these values.
 

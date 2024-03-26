@@ -26,8 +26,7 @@ import type {
 } from "node-fetch";
 import moment from "moment";
 
-import BotConfig, { VMConfig, vmCfgByFriendlyName } from "./lib-bot-config";
-import CFG from "./config";
+import { loadConfig, BotConfig, VMConfig, vmCfgByFriendlyName } from "./config";
 
 /**
  * The interval at which ongoing power requests will be polled. In milliseconds.
@@ -1012,7 +1011,7 @@ class Bot {
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
 	 * @param {Winston.Logger} log Parent logger.
 	 */
-  constructor(cfg, log) {
+  constructor(cfg: BotConfig, log) {
 	  this.cfg = cfg;
 		this.log = log.child({});
   }
@@ -1280,8 +1279,18 @@ interface BotDB {
 	boot_requests: Collection<BootRequestData>;
 }
 
+/**
+ * Main entrypoint
+ * @param log Logger
+ */
 async function main(log) {
-  const bot = new Bot(CFG, log);
+  // Load configuration
+  if (process.env.DISCORD_AZURE_BOOT_CONFIG_FILE === undefined) {
+    throw new Error("DISCORD_AZURE_BOOT_CONFIG_FILE env var must be set to the absolute path of a JSON configuration file");
+  }
+  const cfg = await loadConfig(process.env.DISCORD_AZURE_BOOT_CONFIG_FILE);
+
+  const bot = new Bot(cfg, log);
   await bot.init();
 
 	await bot.waitForExit();
