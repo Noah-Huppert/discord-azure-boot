@@ -100,11 +100,11 @@ yarn start
 The `node-fetch` package is pinned at version 2.6.1 due to [import errors](https://stackoverflow.com/a/69093538). The solution of putting `"type": "module"` in my `package.json` leads to a Typescript error who's solution is to remove `"type": "module"`. I don't actually need any features from the latest version of `node-fetch` so I just pinned it to the latest working version.
 
 # Deployment
-A Docker container and Docker Compose file  named `docker-copose.bot.yml` are provided which run the bot process.
-
-Use this Docker Compose file with the `docker-compose.yml` file to run MongoDB alongside the bot (The [`./dc`](./dc) script helps with this).
+A Docker image is published on Docker hub: [`noahhuppert/discord-azure-boot`](https://hub.docker.com/repository/docker/noahhuppert/discord-azure-boot/general)
 
 To run the bot inside a container you must configure the `mongodb.connectionURI` to point to the MongoDB container IP. With Docker Compose the hostname `mongo` will also point to the MongoDB container.
+
+Be sure to mount the configuration file within the the Docker container when it runs. 
 
 # Design
 User's interact with the bot using slash commands. These are only under the bot's control for 15 minutes ([Discord Slash Command Response Docs](https://discord.com/developers/docs/interactions/slash-commands#responding-to-an-interaction)). As such, all commands must complete within 15 minutes, meaning all server's should start in under 15 minutes.

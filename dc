@@ -1,3 +1,0 @@
-#!/usr/bin/env bash
-set -x
-exec docker-compose -f ./docker-compose.yml -f docker-compose.bot.yml $@
