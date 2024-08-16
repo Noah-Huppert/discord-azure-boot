@@ -5,16 +5,13 @@ import {
 	Collection,
 	ObjectId,
 	Db as MongoDB,
-	WithId,
-	Document,
 } from "mongodb";
 import {
 	Client as DiscordClient,
-	CommandInteraction,
 	Intents as DiscordIntents,
-	InteractionResponseType,
 	MessageEmbedOptions,
 	TextChannel,
+	Interaction,
 } from "discord.js";
 import { REST as DiscordREST } from "@discordjs/rest";
 import { Routes as DiscordRESTRoutes } from "discord-api-types/v9";
@@ -37,11 +34,6 @@ const ONGOING_POWER_REQUEST_INTERVAL = 5000;
  * Discord HTTP API base URL.
  */
 const DISCORD_HTTP_PATH = "https://discord.com/api/v9";
-
-/**
- * The Discord permission integer required for the bot to function. See the Discord section in the README.md for details.
- */
-const DISCORD_BOT_PERM = 2147483648;
 
 /**
  * The boot server Discord slash command name.
@@ -96,22 +88,16 @@ function vmPowerStateFromStr(code: string): VMPowerState|undefined {
 	switch (code) {
 		case VM_POWER_STATE_DEALLOCATED:
 			return VMPowerState.Deallocated;
-			break;
 		case VM_POWER_STATE_DEALLOCATING:
 			return VMPowerState.Deallocating;
-			break;
 		case VM_POWER_STATE_RUNNING:
 			return VMPowerState.Running;
-			break;
 		case VM_POWER_STATE_STARTING:
 			return VMPowerState.Starting;
-			break;
 		case VM_POWER_STATE_STOPPED:
 			return VMPowerState.Stopped;
-			break;
 		case VM_POWER_STATE_STOPPING:
 			return VMPowerState.Stopping;
-			break;
 	}
 
 	return undefined;
@@ -127,13 +113,10 @@ function nonTerminalForPower(power: VMPowerState): VMPowerState {
 	switch (power) {
 		case VMPowerState.Deallocated:
 			return VMPowerState.Deallocating;
-			break;
 		case VMPowerState.Running:
 			return VMPowerState.Starting;
-			break;
 		case VMPowerState.Stopped:
 			return VMPowerState.Stopping;
-			break;
 	}
 
 	throw new Error(`power state ${power} must be terminal, was not`);
@@ -276,7 +259,7 @@ class DiscordInteraction {
 			embeds = [];
 		}
 		
-		const resp = await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+		await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
 			method: "POST",
 			body: JSON.stringify({
 				type: 4, // ChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
@@ -293,7 +276,7 @@ class DiscordInteraction {
 	 * @returns Resolves when Discord API request completes.
 	 */
 	async newDeferResp(): Promise<void> {
-		const resp = await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
+		await this.fetch(`/interactions/${this.interaction_id.id}/${this.interaction_id.token}/callback`, {
 			method: "POST",
 			body: JSON.stringify({
 				type: 5, // DeferredChannelMessageWithSource https://discord.com/developers/docs/interactions/slash-commands#interaction-response-interactioncallbacktype
@@ -312,7 +295,7 @@ class DiscordInteraction {
 			embeds = [];
 		}
 		
-		const resp = await this.fetch(`/webhooks/${this.bot.cfg.discord.applicationID}/${this.interaction_id.token}/messages/@original`, {
+		await this.fetch(`/webhooks/${this.bot.cfg.discord.applicationID}/${this.interaction_id.token}/messages/@original`, {
 			method: "PATCH",
 			body: JSON.stringify({
 				content: content,
@@ -355,18 +338,18 @@ class DiscordCtrlMsg {
 		switch (this.id.ctrl_type) {
 			case DISCORD_CTRL_TXT_MSG:
 				// If a regular Discord message, get it
-				const guild = await this.bot.discord.guilds.cache.get(this.id.location.guildID);
+				const guild = this.bot.discord.guilds.cache.get(this.id.location.guildID);
 				if (guild === undefined) {
 					throw new Error(`could not edit message as its guild with ID ${this.id.location.guildID} could not be found`);
 				}
 				
-				const channel = await guild.channels.cache.get(this.id.location.channelID);
+				const channel = guild.channels.cache.get(this.id.location.channelID);
 				if (channel === undefined) {
 					throw new Error(`could not edit message as its channel with ID ${this.id.location.channelID} could not be found`);
 				}
 				
 				if (channel.isText() === true) {
-					const msg = await (channel as TextChannel).messages.cache.get(this.id.msgID);
+					const msg = (channel as TextChannel).messages.cache.get(this.id.msgID);
 
 					// Then edit
 					await msg.edit({
@@ -810,189 +793,6 @@ interface PowerRequestData {
 	};
 }
 
-/**
- * A request from a user to boot a server. Starts the server then automatically stops the server later.
- */
-class BootRequest {
-	/**
-	 * Bot which holds application context.
-	 */
-	bot: Bot;
-
-	/**
-	 * Information about boot request which is stored in database.
-	 */
-	data: BootRequestData;
-
-	/**
-	 * Create a new BootRequestData. In order for poll() to do anything initBoot() must be called to start the whole process.
-	 * @param bot The bot application context.
-	 * @param vmCfg The configuration for the virtual machine to boot.
-	 * @param followUpLocation The Discord channel where follow up messages about this boot request can be sent.
-	 */
-	constructor(bot: Bot, vmCfg: VMConfig, followUpLocation: DiscordChannelLocation) {
-		this.bot = bot;
-		this.data = {
-			vm_cfg: vmCfg,
-			follow_up_location: followUpLocation,
-			stage: {
-				current: BootRequestStage.Requested,
-				requested: {},
-			},
-		};
-	}
-
-	/**
-	 * Start the boot process by creating a new PowerRequest which uses a Discord interaction as the control message. Stores the PowerRequest's database ID in the .data.stage.booting.power_request_id field.
-	 * @param ctrlMsgID Identifying information of a Discord message to use as a control message.
-	 * @returns Resolves when the PowerRequest has been created and saved in the database.
-	 */
-	async initBoot(ctrlMsgID: DiscordCtrlMsgID) {
-		const powerReq = new PowerRequest(this.bot, ctrlMsgID, this.data.vm_cfg, VMPowerState.Running);
-		await powerReq.save();
-
-		this.data.stage.current = BootRequestStage.Booting,
-		this.data.stage.booting = {
-			power_request_id: powerReq.data._id,
-		};
-	}
-
-	/**
-	 * Store data in the database.
-	 * @returns Resolves when the data has been saved successfully.
-	 */
-	async save(): Promise<void> {
-		if ("_id" in this.data) {
-			// If a database document already exists
-			await this.bot.db.boot_requests.updateOne({ _id: this.data._id }, { $set: this.data });
-		} else {
-			// No document in database for this boot request, insert one
-			const res = await this.bot.db.boot_requests.insertOne(this.data);
-			this.data._id = res.insertedId;
-		}
-	}
-
-	/**
-	 * Loads data from the database.
-	 * @returns Resolves when the data has been successfully loaded.
-	 * @throws {Error} If there is no .data._id field value.
-	 */
-	async load(): Promise<void> {
-		if (!("_id" in this.data)) {
-			throw new Error(`No database _id field stored for this boot request, so cannot load it from the database`);
-		}
-
-		this.data = await this.bot.db.boot_requests.findOne({ _id: this.data._id });
-	}
-
-	/**
-	 * Perform the required action based on the current state of the boot request. 
-	 * @returns Resolves when any actions have been completed. Meant to be real time so should not block for too long.
-	 */
-	async poll(): Promise<void> {
-		// If booting the virtual machine check if done yet
-		// TODO
-
-		// TODO: Set expire time after boot is done
-		// TODO: Send warning message
-		// TODO: Make PowerRequest to shutdown when expired
-	}
-}
-
-/**
- * Boot request information which is stored in the database.
- */
-interface BootRequestData {
-	/**
-	 * Database ID of boot request.
-	 */
-	_id?: ObjectId,
-	
-	/**
-	 * The virtual machine which the user requested be started.
-	 */
-	vm_cfg: VMConfig;
-
-	/**
-	 * Location where follow up messages about this boot request can be sent.
-	 */
-	follow_up_location: DiscordChannelLocation;
-
-	/**
-	 * Information about the current state of the boot request lifecycle.
-	 */
-	stage: {
-		current: BootRequestStage;
-		
-		requested: {};
-
-		booting?: {
-			/**
-			 * ID of the power request which is starting up the machine.
-			 */
-			power_request_id: ObjectId;
-		};
-
-		running?: {
-			/**
-			 * The unix time at which the boot request will expire and the server will be shut off.
-			 */
-			expire_time: number;
-
-			/**
-			 * Identifying information for a control message which can be used to communicate expiration warning information. If undefined then one has not been sent.
-			 */
-			expire_ctrl_msg_id?: DiscordCtrlMsgID;
-		};
-
-		shutting_down?: {
-			/**
-			 * ID of the power request which is shutting down the virtual machine.
-			 */
-			power_request_id: ObjectId;
-		};
-
-		success?: {};
-
-		error?: {};
-	};
-}
-
-/**
- * Indicates the stages of a BootRequest's life cycle.
- */
-enum BootRequestStage {
-	/**
-	 * Non-terminal state. The request has just been submitted and initialized but nothing has been done yet.
-	 */
-	Requested = "requested",
-
-	/**
-	 * Non-terminal state. The virtual machine is in the process of booting.
-	 */
-	Booting = "booting",
-
-	/**
-	 * Non-terminal state. The virtual machine is running.
-	 */
-	Running = "running",
-
-	/**
-	 * Non-terminal state. The virtual machine is being shut down.
-	 */
-	ShuttingDown = "shutting_down",
-
-	/**
-	 * Terminal state. The boot request concluded successfully.
-	 */
-	Success = "success",
-
-	/**
-	 * Terminal state. The boot request failed.
-	 */
-	Error = "error",
-}
-	
 
 /**
  * Provides bot functionality. The init() method must be called before anything else can be called.
@@ -1011,7 +811,7 @@ class Bot {
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
 	 * @param {Winston.Logger} log Parent logger.
 	 */
-  constructor(cfg: BotConfig, log) {
+  constructor(cfg: BotConfig, log: winston.Logger) {
 	  this.cfg = cfg;
 		this.log = log.child({});
   }
@@ -1045,7 +845,6 @@ class Bot {
 		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
 		this.db = {
 			power_requests: this.mongoDB.collection("power_requests"),
-			boot_requests: this.mongoDB.collection("boot_requests"),
 		};
 		
 		this.log.info("connected to mongodb");
@@ -1157,11 +956,17 @@ class Bot {
 
 	/**
 	 * Runs whenever a Discord slash command is invoked.
-	 * @param {Discord Interaction} interaction Discord interaction which was just created by a user invoking a bot's slash command.
+	 * @param interaction Discord interaction which was just created by a user invoking a bot's slash command.
 	 */
-	async onDiscordCmd(interaction) {
+	async onDiscordCmd(interaction: Interaction) {
 		// Only handle slash commands
-		if (interaction.isCommand() !== true) {
+		if (!interaction.isApplicationCommand()) {
+			this.log.warn(`received interaction which was not application command: ${interaction}`);
+			return;
+		}
+
+		if (!interaction.isRepliable()) {
+			this.log.warn(`received interaction which was not repliable: ${interaction}`);
 			return;
 		}
 
@@ -1172,67 +977,46 @@ class Bot {
 		}
 
 		// Check user has required permissions
-		if (this.cfg.discord.permissionRoleID !== null && interaction.member.roles.cache.has(this.cfg.discord.permissionRoleID) === false) {
+		if (this.cfg.discord.permissionRoleID !== null && interaction.memberPermissions.has(BigInt(this.cfg.discord.permissionRoleID)) === false) {
 			// If configured check if user has permissions to invoke the command
 			await interaction.reply("Sorry, you do not have permission to use this command.");
 			return;
 		}
 
-		if (interaction.commandName === BOOT_CMD_NAME) {
-			// Find parameters about vm from config
-			const optName = interaction.options.getString("server");
-			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
-
-			// Defer response until PowerRequest.poll() can update it
-			await interaction.deferReply();
-
-			// Determine if a power request is already running for this vm
-			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
-			if (otherReqs > 0) {
-				interaction.editReply(`Sorry, the ${vmCfg.friendlyName} server is busy right now. Please wait until other commands are finished working on this server.`);
-				return;
-			}
-
-			// Setup boot request
-			const ctrlMsgID: DiscordCtrlMsgID = {
-				ctrl_type: DISCORD_CTRL_INTERACTION,
-				id: interaction.id,
-				token: interaction.token
-			};
-			const bootReq = new BootRequest(this, vmCfg, {
-				guildID: interaction.guildID,
-				channelID: interaction.channelID,
-			});
-			
-			await bootReq.initBoot(ctrlMsgID);
-			await bootReq.poll();
-			await bootReq.save();
-
-			return;
-		} else if (interaction.commandName === SHUTDOWN_CMD_NAME) {
-			// Find parameters about vm from config
-			const optName = interaction.options.getString("server");
-			const vmCfg = vmCfgByFriendlyName(this.cfg, optName);
-
-			// Defer response until PowerRequest.poll() can update it
-			await interaction.deferReply();
-
-			// Determine if a power request is already running for this vm
-			const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
-			if (otherReqs > 0) {
-				interaction.editReply(`Sorry, the ${vmCfg.friendlyName} server is busy right now. Please wait until other commands are finished working on this server.`);
-				return;
-			}
-
-			// Setup power request
-			const powerReq = new PowerRequest(this, { ctrl_type: DISCORD_CTRL_INTERACTION, id: interaction.id, token: interaction.token }, vmCfg, VMPowerState.Deallocated);
-			await powerReq.poll();
-			await powerReq.save();
-
+		// Check recognized command
+		if (![BOOT_CMD_NAME, SHUTDOWN_CMD_NAME].includes(interaction.commandName)) {
+			this.log.warn("unknown interaction type", { interaction });
 			return;
 		}
 
-		this.log.warn("unknown interaction type", { interaction });
+		// Find parameters about vm from config
+		const optName = interaction.options.get("server", true);
+		if (typeof optName.value !== "string") {
+			this.log.warn(`received interaction with non string "server" option, was "${typeof(optName.value)}": ${interaction}`)
+			return;
+		}
+		const vmCfg = vmCfgByFriendlyName(this.cfg, optName.value);
+
+		// Defer response until PowerRequest.poll() can update it
+		await interaction.deferReply();
+
+		// Determine if a power request is already running for this vm
+		const otherReqs = await PowerRequest.OngoingCount(this, vmCfg);
+		if (otherReqs > 0) {
+			interaction.editReply(`Sorry, the ${vmCfg.friendlyName} server is busy right now. Please wait until other commands are finished working on this server.`);
+			return;
+		}
+
+		// Setup boot request
+		const ctrlMsgID: DiscordCtrlMsgID = {
+			ctrl_type: DISCORD_CTRL_INTERACTION,
+			id: interaction.id,
+			token: interaction.token
+		};
+		const reqPowerState = interaction.commandName === BOOT_CMD_NAME ? VMPowerState.Running : VMPowerState.Deallocated;
+		const powerReq = new PowerRequest(this, ctrlMsgID, vmCfg, reqPowerState);
+		await powerReq.save()
+		await powerReq.save();
 	}
 
 	/**
@@ -1257,7 +1041,7 @@ class Bot {
 	 * Run until an exit signal is sent to the process.
 	 */
   async waitForExit() {
-		await new Promise<void>((resolve, reject) => {
+		await new Promise<void>((resolve, _reject) => {
 			process.on("SIGTERM", resolve);
 			process.on("SIGINT", resolve);
 		});
@@ -1272,18 +1056,13 @@ interface BotDB {
 	 * Power Requests collection.
 	 */
 	power_requests: Collection<PowerRequestData>;
-
-	/**
-	 * Boot Requests collection.
-	 */
-	boot_requests: Collection<BootRequestData>;
 }
 
 /**
  * Main entrypoint
  * @param log Logger
  */
-async function main(log) {
+async function main(log: winston.Logger) {
   // Load configuration
   if (process.env.DISCORD_AZURE_BOOT_CONFIG_FILE === undefined) {
     throw new Error("DISCORD_AZURE_BOOT_CONFIG_FILE env var must be set to the absolute path of a JSON configuration file");

@@ -83,9 +83,9 @@ export const CBotConfig = z.object({
 		applicationID: z.string(),
 
 		/**
-		 * ID of the Discord role which users must have in order to utilize the bot. Currently set to the berry boy role.
+		 * ID of the Discord role which users must have in order to utilize the bot.
 		 */
-		permissionRoleID: z.optional(z.string()),
+		permissionRoleID: z.optional(z.number()),
 
 		/**
 		 * Discord API application bot authentication token.
