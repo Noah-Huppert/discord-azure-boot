@@ -31,6 +31,16 @@ import { loadConfig, BotConfig, VMConfig, vmCfgByFriendlyName } from "./config";
 const ONGOING_POWER_REQUEST_INTERVAL = 5000;
 
 /**
+ * The number of seconds between checking for VMs which could use a shutdown reminder. In milliseconds
+ */
+const SHUTDOWN_REMINDER_CHECK_INTERVAL = 1000 * 60;
+
+/**
+ * Length of time a VM can run before a shutdown reminder is sent. In milliseconds.
+ */
+const SHUTDOWN_REMINDER_AFTER_TIME = 1000 * 60 * 60 * 3; // 3 hours
+
+/**
  * Discord HTTP API base URL.
  */
 const DISCORD_HTTP_PATH = "https://discord.com/api/v9";
@@ -769,6 +779,16 @@ interface PowerRequestData {
 			 * The unix time when the success occurred.
 			 */
 			time: number;
+
+			/**
+			 * If a shutdown reminder message was sent this is the ID of the Discord message.
+			 */
+			shutdown_reminder_msg_id?: DiscordCtrlMsgID
+
+			/**
+			 * If the user responded to the shutdown reminder that they need more time this is when they responded. Unix time.
+			 */
+			last_shutdown_snooze_time?: number;
 		};
 
 		/**
@@ -806,6 +826,7 @@ class Bot {
 	db: BotDB;
 	discord: DiscordClient;
 	pollOngoingInterval: NodeJS.Timeout;
+	pollShutdownReminderInterval: NodeJS.Timeout;
 	
   /**
 	 * Creates a partially setup Bot class. Before any other methods are run Bot.init() must be called.
@@ -940,6 +961,8 @@ class Bot {
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
+		this.pollShutdownReminderInterval = setInterval(this.pollShutdownRemind.bind(this), SHUTDOWN_REMINDER_CHECK_INTERVAL);
+
 		this.log.info("setup polling");
   }
 
@@ -949,6 +972,7 @@ class Bot {
   async cleanup() {
 		// Stop poll ongoing interval
 		clearInterval(this.pollOngoingInterval);
+		clearInterval(this.pollShutdownReminderInterval);
 		
 	  // Disconnect from MongoDB
 	  this.mongoClient.close();
@@ -1035,6 +1059,30 @@ class Bot {
 
 			await power_req.save();
 		}));
+	}
+
+	/**
+	 * Find VMs which are still on after a power request and could use a reminder to shutdown.
+	 */
+	async pollShutdownRemind() {
+		const unshutdownReqs = await this.db.power_requests.aggregate([
+			{
+				$match: {
+					target_power: VMPowerState.Running,
+					success: { $exists: true },
+				}
+			},
+			{
+				$addFields: {
+					check_shutdown_base_time: { $max: [ "$success.time", "$success.last_shutdown_snooze_time"] }
+				}
+			},
+			{
+				$match: {
+					check_shutdown_base_time: { $gte:  // TODO: Calculate time after which reminder should be sent, ig this has to do with when the request happened so has to occur in mongo bc diff for each doc}
+				}
+			}
+		]);
 	}
 
   /**
