@@ -9,7 +9,7 @@ RUN yarn install
 
 # Source files
 COPY tsconfig.json ./
-COPY *.ts ./
+COPY ./src ./src
 RUN yarn build
 
-ENTRYPOINT node build/index.js
+ENTRYPOINT [ "node", "build/index.js" ]
