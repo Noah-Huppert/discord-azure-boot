@@ -4,12 +4,12 @@ RUN mkdir -p /opt/discord-azure-bot
 WORKDIR /opt/discord-azure-bot
 
 # Dependencies
-COPY package.json yarn.lock ./
-RUN yarn install
+COPY package.json package-lock.json ./
+RUN npm install --package-lock-only
 
 # Source files
 COPY tsconfig.json ./
 COPY ./src ./src
-RUN yarn build
+RUN npm run build
 
 ENTRYPOINT [ "node", "build/index.js" ]

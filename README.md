@@ -77,7 +77,7 @@ Written in Typescript. MongoDB is used to store data about server start requests
 Install dependencies:
 
 ```
-yarn install
+npm install
 ```
 
 To start MongoDB a Docker Compose file with MongoDB setup is provided. To start MongoDB using this file run:
@@ -93,7 +93,7 @@ Follow instructions in [Setup](#setup) to create the necessary Azure resources a
 Run the bot:
 
 ```
-yarn start
+npm start
 ```
 
 ## Dependency Notes
