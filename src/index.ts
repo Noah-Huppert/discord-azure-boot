@@ -40,7 +40,7 @@ const SHUTDOWN_REMINDER_CHECK_INTERVAL = 1000 * 60;
  *
  * 3 hours.
  */
-const SHUTDOWN_REMINDER_AFTER_TIME = 1000 * 60 * 60 * 3;
+const SHUTDOWN_REMINDER_AFTER_TIME = 1000; // TODO UNCOMMENT WHEN NOT DEV: 1000 * 60 * 60 * 3;
 
 /**
  * Discord HTTP API base URL.
@@ -844,128 +844,148 @@ class Bot {
 	 * @throws {Error} If the bot fails to initialize.
 	 */
   async init() {
-	  // Authenticate with the Azure API
-		this.log.info("trying to authenticate with azure");
+		this.log.info("starting setup");
+
+		await Promise.all([
+			// Authenticate with the Azure API
+			new Promise<void>(async (resolve, reject) => {
+				this.log.info("trying to authenticate with azure");
 		
-		const azureCreds = new ClientSecretCredential(this.cfg.azure.directoryID, this.cfg.azure.applicationID, this.cfg.azure.accessToken);
+				const azureCreds = new ClientSecretCredential(this.cfg.azure.directoryID, this.cfg.azure.applicationID, this.cfg.azure.accessToken);
 
-	  this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
-		this.log.info("authenticated with azure");
+				this.azureCompute = new ComputeManagementClient(azureCreds, this.cfg.azure.subscriptionID);
+				this.log.info("authenticated with azure");
 
-	  // Ensure all the virtual machines the user specified actually exist
-	  try {
-		  await Promise.all(this.cfg.vms.map(async (vm) => {
-				await this.azureCompute.virtualMachines.get(vm.resourceGroup, vm.azureName);
-		  }));
-	  } catch (e) {
-		  throw new Error(`Failed to find all virtual machines specified in the configuration: ${e}`);
-	  }
+				// Ensure all the virtual machines the user specified actually exist
+				this.log.info("finding azure vms");
+				try {
+					const getVMsProm = await Promise.all(this.cfg.vms.map(async (vm) => {
+						await this.azureCompute.virtualMachines.get(vm.resourceGroup, vm.azureName);
+					}));
+					this.log.info("found azure vms", { vm_count: getVMsProm.length });
+				} catch (e) {
+					throw new Error(`Failed to find all virtual machines specified in the configuration: ${e}`);
+				}
 
-	  // Connect to MongoDB
-		this.log.info("trying to connect to mongodb");
-	  this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI);
-	  await this.mongoClient.connect();
-		this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
-		this.db = {
-			power_requests: this.mongoDB.collection("power_requests"),
-		};
-		
-		this.log.info("connected to mongodb");
+				resolve();
+			}),
 
-		// Connect to Discord
-		const discordOAuthURL = encodeURI(`https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot applications.commands`);
-		this.log.info(`invite and authorize the discord api application via oauth2: ${discordOAuthURL}`);
-		this.log.info("trying to connect to discord");
+			// Connect to MongoDB
+			new Promise<void>(async (resolve, reject) => {
+				this.log.info("trying to connect to mongodb");
+				this.mongoClient = new MongoClient(this.cfg.mongodb.connectionURI);
+				await this.mongoClient.connect();
+				this.mongoDB = this.mongoClient.db(this.cfg.mongodb.dbName);
+				this.db = {
+					power_requests: this.mongoDB.collection("power_requests"),
+				};
 
-		this.discord = new DiscordClient({
-			intents: [
-				DiscordIntents.FLAGS.GUILDS,
-			],
-		});
+				this.log.info("connected to mongodb");
 
-		let discordReadyProm: {
-			promise: Promise<void>|null,
-			resolve: () => void,
-			reject: () => void
-		} = { promise: null, resolve: () => {}, reject: () => {} };
-		discordReadyProm.promise = new Promise((resolve, reject) => {
-			discordReadyProm.resolve = resolve;
-			discordReadyProm.reject = reject;
-		});
-		this.discord.once("ready", async  () => {
-			discordReadyProm.resolve();
-		});
+				resolve();
+			}),
 
-		this.discord.on("interactionCreate", this.onDiscordCmd.bind(this));
-		this.discord.login(this.cfg.discord.botToken);
-		await discordReadyProm.promise;
-		this.log.info("connected to discord");
+			// Connect to Discord.
+			new Promise<void>(async (resolve, reject) => {
+				const discordOAuthURL = encodeURI(`https://discord.com/api/oauth2/authorize?client_id=${this.cfg.discord.applicationID}&scope=bot applications.commands`);
+				this.log.info(`invite and authorize the discord api application via oauth2: ${discordOAuthURL}`);
+				this.log.info("trying to connect to discord");
 
-		// Setup Discord slash commands
-		if (this.cfg.discord.permissionRoleID !== null) {
-			this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
-		}
-		
-		const VM_CHOICES = this.cfg.vms.map((vm) => {
-			return {
-				name: vm.friendlyName,
-				value: vm.friendlyName,
-			};
-		});
+				this.discord = new DiscordClient({
+					intents: [
+						DiscordIntents.FLAGS.GUILDS,
+					],
+				});
 
-		const discordCommands = [
-			new DiscordSlashCommandBuilder()
-				.setName(BOOT_CMD_NAME)
-				.setDescription("Start a game server")
-				.addStringOption((opt) => 
-					opt
-						.setName("server")
-						.setDescription("The server to start")
-						.setRequired(true)
-						.addChoices(...VM_CHOICES)
-  			),
-			new DiscordSlashCommandBuilder()
-				.setName(SHUTDOWN_CMD_NAME)
-				.setDescription("Turn off a gamer server")
-				.addStringOption((opt) => 
-					opt
-						.setName("server")
-						.setDescription("The server to shutdown")
-						.setRequired(true)
-						.addChoices(...VM_CHOICES)
-				),
-		].map((cmd) => cmd.toJSON());
-		
-		const discordREST = new DiscordREST({ version: "9" }).setToken(this.cfg.discord.botToken);
-		if (this.cfg.discord.guildID) {
-			// Using guild specific commands
-			// Sanity check that the specified guild exists
-			const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
-			
-			if (guild === undefined) {
-				throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
-			}
-			
-			this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
+				let discordReadyProm: {
+					promise: Promise<void> | null,
+					resolve: () => void,
+					reject: () => void
+				} = { promise: null, resolve: () => {}, reject: () => {} };
+				discordReadyProm.promise = new Promise((resolve, reject) => {
+					discordReadyProm.resolve = resolve;
+					discordReadyProm.reject = reject;
+				});
+				this.discord.once("ready", async () => {
+					discordReadyProm.resolve();
+				});
 
-			await discordREST.put(
-				DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID),
-				{ body: discordCommands }
-			);
-		} else {
-			// Using global slash commands
-			await discordREST.put(
-				DiscordRESTRoutes.applicationCommands(this.cfg.discord.applicationID),
-				{ body: discordCommands }
-			);
-		}
-		this.log.info("registered discord slash commands");
+				this.discord.on("interactionCreate", this.onDiscordCmd.bind(this));
+				this.discord.login(this.cfg.discord.botToken);
+				await discordReadyProm.promise;
+				this.log.info("connected to discord");
+
+				// Setup Discord slash commands
+				if (this.cfg.discord.permissionRoleID !== null) {
+					this.log.info(`restricting Discord commands to users with role ID ${this.cfg.discord.permissionRoleID}`);
+				}
+
+				const VM_CHOICES = this.cfg.vms.map((vm) => {
+					return {
+						name: vm.friendlyName,
+						value: vm.friendlyName,
+					};
+				});
+
+				const discordCommands = [
+					new DiscordSlashCommandBuilder()
+						.setName(BOOT_CMD_NAME)
+						.setDescription("Start a game server")
+						.addStringOption((opt) =>
+							opt
+								.setName("server")
+								.setDescription("The server to start")
+								.setRequired(true)
+								.addChoices(...VM_CHOICES)
+						),
+					new DiscordSlashCommandBuilder()
+						.setName(SHUTDOWN_CMD_NAME)
+						.setDescription("Turn off a gamer server")
+						.addStringOption((opt) =>
+							opt
+								.setName("server")
+								.setDescription("The server to shutdown")
+								.setRequired(true)
+								.addChoices(...VM_CHOICES)
+						),
+				].map((cmd) => cmd.toJSON());
+
+				const discordREST = new DiscordREST({ version: "9" }).setToken(this.cfg.discord.botToken);
+				if (this.cfg.discord.guildID) {
+					// Using guild specific commands
+					// Sanity check that the specified guild exists
+					const guild = this.discord.guilds.cache.get(this.cfg.discord.guildID);
+
+					if (guild === undefined) {
+						throw new Error(`Could not find guild with ID ${this.cfg.discord.guildID}, maybe the bot doesn't have access to this guild (use the invitation link in the logs above)`);
+					}
+
+					this.log.info(`using guild ID ${this.cfg.discord.guildID} local slash commands`);
+
+					await discordREST.put(
+						DiscordRESTRoutes.applicationGuildCommands(this.cfg.discord.applicationID, this.cfg.discord.guildID),
+						{ body: discordCommands }
+					);
+				} else {
+					// Using global slash commands
+					await discordREST.put(
+						DiscordRESTRoutes.applicationCommands(this.cfg.discord.applicationID),
+						{ body: discordCommands }
+					);
+				}
+				this.log.info("registered discord slash commands");
+
+				resolve();
+			}),
+		]);
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
-		this.pollShutdownReminderInterval = setInterval(this.pollShutdownRemind.bind(this), SHUTDOWN_REMINDER_CHECK_INTERVAL);
+				this.pollShutdownReminderInterval = setInterval(this.pollShutdownRemind.bind(this), SHUTDOWN_REMINDER_CHECK_INTERVAL);
 
-		this.log.info("setup polling");
+				this.log.info("setup polling");
+
+		this.log.info("finished setup");
   }
 
   /**
@@ -1107,11 +1127,11 @@ class Bot {
 			}
 		]);
 
-		console.log("start shutdown req");
+		this.log.debug("start shutdown req");
 		for await (const shutdownReq of unshutdownReqs) {
-			console.log(`shutdown req: `, shutdownReq);
+			this.log.debug({shutdown_req: shutdownReq});
 		}
-		console.log("end shutdown req");
+		this.log.debug("end shutdown req");
 	}
 
   /**
