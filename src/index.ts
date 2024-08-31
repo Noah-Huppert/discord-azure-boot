@@ -33,7 +33,7 @@ const ONGOING_POWER_REQUEST_INTERVAL = 5000;
 /**
  * The number of seconds between checking for VMs which could use a shutdown reminder. In milliseconds
  */
-const SHUTDOWN_REMINDER_CHECK_INTERVAL = 1000 * 60;
+const SHUTDOWN_REMINDER_CHECK_INTERVAL = 1000 * 20; // TODO UNCOMMENT WHEN NOT DEV: 1000 * 60;
 
 /**
  * Length of time a VM can run before a shutdown reminder is sent. In milliseconds.
@@ -981,9 +981,9 @@ class Bot {
 
 		// Setup poll ongoing interval
 		this.pollOngoingInterval = setInterval(this.pollOngoing.bind(this), ONGOING_POWER_REQUEST_INTERVAL);
-				this.pollShutdownReminderInterval = setInterval(this.pollShutdownRemind.bind(this), SHUTDOWN_REMINDER_CHECK_INTERVAL);
+		this.pollShutdownReminderInterval = setInterval(this.pollShutdownRemind.bind(this), SHUTDOWN_REMINDER_CHECK_INTERVAL);
 
-				this.log.info("setup polling");
+		this.log.info("setup polling");
 
 		this.log.info("finished setup");
   }
@@ -1089,17 +1089,23 @@ class Bot {
 	async pollShutdownRemind() {
 		 // TODO: Calculate time after which reminder should be sent, ig this has to do with when the request happened so has to occur in mongo bc diff for each doc}
 			//
-		const unshutdownReqs = this.db.power_requests.aggregate([
+		const unshutdownReqsCur = this.db.power_requests.aggregate([
 			{
 				$match: {
 					target_power: VMPowerState.Running,
-					success: { $exists: true },
+					"stage.success": { $exists: true },
 				}
 			},
 			{
 				$addFields: {
-					check_shutdown_base_time: { $max: [ "$success.time", "$success.last_shutdown_snooze_time"] },
-				}
+					_now: "$$NOW",
+					check_shutdown_base_time: {
+						$max: [
+							"$stage.success.time",
+							"$stage.success.last_shutdown_snooze_time",
+						],
+					},
+				},
 			},
 			{
 				$addFields: {
@@ -1122,15 +1128,29 @@ class Bot {
 			},
 			{
 				$match: {
-					check_shutdown_base_time_t: { $gte: "$should_shutdown_reminder_after" },
+					should_shutdown_reminder_after_t: {
+						lte: "$$NOW",
+					},
+					//check_shutdown_base_time_t: { $gte: "$should_shutdown_reminder_after" },
+					//_now: { $gte: "$should_shutdown_reminder_after_t" },
 				},
 			}
 		]);
 
 		this.log.debug("start shutdown req");
-		for await (const shutdownReq of unshutdownReqs) {
+
+		const unshutdownReqs = await unshutdownReqsCur.toArray();
+		await Promise.all(unshutdownReqs.map(async (shutdownReq) => {
 			this.log.debug({shutdown_req: shutdownReq});
-		}
+
+			// TODO: Check VM for power request is actually in need of being turned off (someone could have turned off manually)
+			// TODO: Check if shutdown message has been sent
+			// TODO: Send shutdown reminder message
+			// TODO: Implement snooze button
+			// TODO: Implement auto shutdown
+		}));
+
+
 		this.log.debug("end shutdown req");
 	}
 
