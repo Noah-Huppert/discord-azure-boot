@@ -37,8 +37,10 @@ const SHUTDOWN_REMINDER_CHECK_INTERVAL = 1000 * 60;
 
 /**
  * Length of time a VM can run before a shutdown reminder is sent. In milliseconds.
+ *
+ * 3 hours.
  */
-const SHUTDOWN_REMINDER_AFTER_TIME = 1000 * 60 * 60 * 3; // 3 hours
+const SHUTDOWN_REMINDER_AFTER_TIME = 1000 * 60 * 60 * 3;
 
 /**
  * Discord HTTP API base URL.
@@ -1065,7 +1067,9 @@ class Bot {
 	 * Find VMs which are still on after a power request and could use a reminder to shutdown.
 	 */
 	async pollShutdownRemind() {
-		const unshutdownReqs = await this.db.power_requests.aggregate([
+		 // TODO: Calculate time after which reminder should be sent, ig this has to do with when the request happened so has to occur in mongo bc diff for each doc}
+			//
+		const unshutdownReqs = this.db.power_requests.aggregate([
 			{
 				$match: {
 					target_power: VMPowerState.Running,
@@ -1074,15 +1078,40 @@ class Bot {
 			},
 			{
 				$addFields: {
-					check_shutdown_base_time: { $max: [ "$success.time", "$success.last_shutdown_snooze_time"] }
+					check_shutdown_base_time: { $max: [ "$success.time", "$success.last_shutdown_snooze_time"] },
+				}
+			},
+			{
+				$addFields: {
+					check_shutdown_base_time_t: {
+						$toDate: "$check_shutdown_base_time",
+					},
+				},
+			},
+			{
+				$addFields: {
+					should_shutdown_reminder_after_t: {
+						$dateAdd: {
+							startDate: "$check_shutdown_base_time_t",
+							unit: "millisecond",
+							amount: SHUTDOWN_REMINDER_AFTER_TIME,
+							timezone: "GMT",
+						}
+					}
 				}
 			},
 			{
 				$match: {
-					check_shutdown_base_time: { $gte:  // TODO: Calculate time after which reminder should be sent, ig this has to do with when the request happened so has to occur in mongo bc diff for each doc}
-				}
+					check_shutdown_base_time_t: { $gte: "$should_shutdown_reminder_after" },
+				},
 			}
 		]);
+
+		console.log("start shutdown req");
+		for await (const shutdownReq of unshutdownReqs) {
+			console.log(`shutdown req: `, shutdownReq);
+		}
+		console.log("end shutdown req");
 	}
 
   /**
